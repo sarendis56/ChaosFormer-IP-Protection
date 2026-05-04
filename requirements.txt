@@ -18,7 +18,7 @@ triton>=3.4.0
 
 # Performance optimization
 numba>=0.58
-tbb>=2021.6 # For CPU execution; if it triggers "NumbaWarning" with TBB versioning issue, see README.md for more details
+tbb>=2021.6; platform_machine != "aarch64" # For CPU execution; if it triggers "NumbaWarning" with TBB versioning issue, see README.md for more details
 
 pypuf==2.2.0 # For PUF simulation
 seaborn>=0.13.2

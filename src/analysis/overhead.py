@@ -208,7 +208,9 @@ class InferenceOverheadAnalyzer:
         imagenet_path = Path("dataset/imagenet/val")
 
         if not imagenet_path.exists():
-            raise FileNotFoundError(f"ImageNet dataset not found at {imagenet_path}. Please ensure dataset is setup correctly.")
+            print(f"ImageNet dataset not found at {imagenet_path}; generating {num_samples} random tensors for benchmarking.")
+            self.imagenet_samples = torch.randn(num_samples, 3, 224, 224, device=self.device)
+            return self.imagenet_samples[:batch_size]
 
         # Get all image files from all class directories
         image_files = []
@@ -218,7 +220,9 @@ class InferenceOverheadAnalyzer:
                 image_files.extend(class_images)
 
         if len(image_files) == 0:
-            raise RuntimeError(f"No JPEG images found in ImageNet dataset at {imagenet_path}")
+            print(f"No JPEG images found at {imagenet_path}; generating {num_samples} random tensors for benchmarking.")
+            self.imagenet_samples = torch.randn(num_samples, 3, 224, 224, device=self.device)
+            return self.imagenet_samples[:batch_size]
 
         # Set seed for reproducible sampling
         random.seed(42)
@@ -243,9 +247,9 @@ class InferenceOverheadAnalyzer:
                 continue
 
         if len(processed_images) == 0:
-            print("Warning: Failed to load any images from ImageNet dataset")
-            print("Falling back to random tensor generation...")
-            return torch.randn(batch_size, 3, 224, 224).to(self.device)
+            print(f"Failed to load any ImageNet images; generating {num_samples} random tensors for benchmarking.")
+            self.imagenet_samples = torch.randn(num_samples, 3, 224, 224, device=self.device)
+            return self.imagenet_samples[:batch_size]
 
         # Stack all images and create batches
         all_images = torch.stack(processed_images)
