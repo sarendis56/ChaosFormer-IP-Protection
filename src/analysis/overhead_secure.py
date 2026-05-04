@@ -56,6 +56,11 @@ class TimingBreakdown:
     xor_enc_time: float = 0.0
     xor_dec_time: float = 0.0
     overhead_ratio: float = 1.0
+    # Transient peak memory in bytes: extra memory occupied by tensors during a run,
+    # measured relative to allocation level entering the run. 0.0 on devices we don't
+    # instrument (currently CPU — PyTorch's CPU allocator is opaque to tracemalloc).
+    peak_memory_baseline_bytes: float = 0.0
+    peak_memory_encrypted_bytes: float = 0.0
 
     @property
     def encryption_time(self) -> float:
@@ -68,6 +73,16 @@ class TimingBreakdown:
     @property
     def total_overhead_time(self) -> float:
         return self.encryption_time + self.decryption_time
+
+    @property
+    def memory_overhead_bytes(self) -> float:
+        return self.peak_memory_encrypted_bytes - self.peak_memory_baseline_bytes
+
+    @property
+    def memory_overhead_ratio(self) -> float:
+        if self.peak_memory_baseline_bytes <= 0:
+            return 0.0
+        return self.peak_memory_encrypted_bytes / self.peak_memory_baseline_bytes
 
 
 class InferenceOverheadAnalyzer:
@@ -422,18 +437,41 @@ class InferenceOverheadAnalyzer:
 
 
         # Measure baseline inference (no encryption)
+        # Memory tracking (CUDA only): reset the peak-allocated counter just before the
+        # loop and read max_memory_allocated after. Subtracting the entering allocation
+        # level gives the transient peak — i.e. additional tensor memory used by the run.
+        if self.device.type == 'cuda':
+            self._synchronize()
+            base_alloc_baseline = torch.cuda.memory_allocated(self.device)
+            torch.cuda.reset_peak_memory_stats(self.device)
+        else:
+            base_alloc_baseline = 0
+
         baseline_times = []
         for _ in range(num_runs):
             self._synchronize()
             start_time = time.perf_counter()
-            
+
             with torch.no_grad():
                 _ = self.model(sample_input)
-            
+
             self._synchronize()
             baseline_times.append(time.perf_counter() - start_time)
 
+        if self.device.type == 'cuda':
+            self._synchronize()
+            transient_peak_baseline = float(torch.cuda.max_memory_allocated(self.device) - base_alloc_baseline)
+        else:
+            transient_peak_baseline = 0.0
+
         # Measure encrypted inference with realistic sequential processing
+        if self.device.type == 'cuda':
+            self._synchronize()
+            base_alloc_encrypted = torch.cuda.memory_allocated(self.device)
+            torch.cuda.reset_peak_memory_stats(self.device)
+        else:
+            base_alloc_encrypted = 0
+
         encrypted_times = []
         acm_decrypt_times = []
         acm_encrypt_times = []
@@ -619,9 +657,15 @@ class InferenceOverheadAnalyzer:
             xor_decrypt_times.append(run_xor_decrypt_time)
             xor_encrypt_times.append(run_xor_encrypt_time)
 
+        if self.device.type == 'cuda':
+            self._synchronize()
+            transient_peak_encrypted = float(torch.cuda.max_memory_allocated(self.device) - base_alloc_encrypted)
+        else:
+            transient_peak_encrypted = 0.0
+
         # Restore original model state
         self.model.load_state_dict(original_state)
-        
+
         return {
             'baseline_time': np.mean(baseline_times),
             'encrypted_time': np.mean(encrypted_times),
@@ -631,9 +675,11 @@ class InferenceOverheadAnalyzer:
             'ffn_encrypt_time': np.mean(ffn_encrypt_times),
             'xor_decrypt_time': np.mean(xor_decrypt_times),
             'xor_encrypt_time': np.mean(xor_encrypt_times),
-            'total_overhead': (np.mean(acm_decrypt_times) + np.mean(acm_encrypt_times) + 
+            'total_overhead': (np.mean(acm_decrypt_times) + np.mean(acm_encrypt_times) +
                              np.mean(ffn_decrypt_times) + np.mean(ffn_encrypt_times) +
-                             np.mean(xor_decrypt_times) + np.mean(xor_encrypt_times))
+                             np.mean(xor_decrypt_times) + np.mean(xor_encrypt_times)),
+            'peak_memory_baseline_bytes': transient_peak_baseline,
+            'peak_memory_encrypted_bytes': transient_peak_encrypted,
         }
 
 
@@ -650,7 +696,9 @@ class InferenceOverheadAnalyzer:
             ffn_dec_time=timing_result['ffn_decrypt_time'],
             xor_enc_time=timing_result['xor_encrypt_time'],
             xor_dec_time=timing_result['xor_decrypt_time'],
-            overhead_ratio=timing_result['encrypted_time'] / timing_result['baseline_time']
+            overhead_ratio=timing_result['encrypted_time'] / timing_result['baseline_time'],
+            peak_memory_baseline_bytes=timing_result.get('peak_memory_baseline_bytes', 0.0),
+            peak_memory_encrypted_bytes=timing_result.get('peak_memory_encrypted_bytes', 0.0),
         )
 
     def analyze_layers_overhead(self, max_layers: int = 12) -> List[TimingBreakdown]:
@@ -786,6 +834,7 @@ class InferenceOverheadAnalyzer:
 
     def _timing_to_dict(self, result: TimingBreakdown, **extra_fields) -> dict:
         """Convert TimingBreakdown to dictionary for CSV export."""
+        mb = 1024 * 1024
         return {
             'forward_time_ms': result.forward_time * 1000,
             'acm_enc_time_ms': result.acm_enc_time * 1000,
@@ -796,6 +845,10 @@ class InferenceOverheadAnalyzer:
             'xor_dec_time_ms': result.xor_dec_time * 1000,
             'total_time_ms': result.total_time * 1000,
             'overhead_ratio': result.overhead_ratio,
+            'peak_memory_baseline_mb': result.peak_memory_baseline_bytes / mb,
+            'peak_memory_encrypted_mb': result.peak_memory_encrypted_bytes / mb,
+            'memory_overhead_mb': result.memory_overhead_bytes / mb,
+            'memory_overhead_ratio': result.memory_overhead_ratio,
             **extra_fields
         }
 
@@ -818,6 +871,24 @@ class InferenceOverheadAnalyzer:
         pd.DataFrame(layers_data).to_csv(f'{output_dir}/{layers_filename}', index=False)
 
         print(f"✓ Saved data: {output_dir}/{layers_filename}")
+
+    def _print_memory_summary(self, results: List[TimingBreakdown], x_labels: list,
+                              x_name: str, label: str):
+        """Print transient peak-memory comparison for a result sweep (CUDA only)."""
+        if not results:
+            return
+        if self.device.type != 'cuda':
+            print(f"\n[{label}] Memory measurement is GPU-only; skipping summary on {self.device.type.upper()}.")
+            return
+        mb = 1024 * 1024
+        print(f"\n=== Transient peak memory — {label} ===")
+        print(f"{x_name:>22} {'Baseline (MiB)':>16} {'Encrypted (MiB)':>17} {'Overhead (MiB)':>16} {'Ratio':>10}")
+        for r, x in zip(results, x_labels):
+            ratio = r.memory_overhead_ratio
+            ratio_str = f"{ratio:.3f}x" if ratio > 0 else "N/A"
+            print(f"{str(x):>22} {r.peak_memory_baseline_bytes / mb:>16.2f} "
+                  f"{r.peak_memory_encrypted_bytes / mb:>17.2f} "
+                  f"{r.memory_overhead_bytes / mb:>16.2f} {ratio_str:>10}")
 
     def create_batch64_only_plot(self,
                                 layers_results_batch64: List[TimingBreakdown],
@@ -858,12 +929,15 @@ class InferenceOverheadAnalyzer:
             return None
         
         df = pd.read_csv(csv_path)
+        mb = 1024 * 1024
         results = []
         for _, row in df.iterrows():
             forward_time = max(row['forward_time_ms'] / 1000.0, 1e-8)
             # Handle both old format (without XOR) and new format (with XOR)
             xor_enc_time = row.get('xor_enc_time_ms', 0.0) / 1000.0
             xor_dec_time = row.get('xor_dec_time_ms', 0.0) / 1000.0
+            peak_baseline_bytes = float(row.get('peak_memory_baseline_mb', 0.0)) * mb
+            peak_encrypted_bytes = float(row.get('peak_memory_encrypted_mb', 0.0)) * mb
             results.append(TimingBreakdown(
                 total_time=row['total_time_ms'] / 1000.0,
                 forward_time=forward_time,
@@ -873,7 +947,9 @@ class InferenceOverheadAnalyzer:
                 ffn_dec_time=row['ffn_dec_time_ms'] / 1000.0,
                 xor_enc_time=xor_enc_time,
                 xor_dec_time=xor_dec_time,
-                overhead_ratio=row['overhead_ratio']
+                overhead_ratio=row['overhead_ratio'],
+                peak_memory_baseline_bytes=peak_baseline_bytes,
+                peak_memory_encrypted_bytes=peak_encrypted_bytes,
             ))
         return results
 
@@ -944,6 +1020,8 @@ class InferenceOverheadAnalyzer:
         # Save batch size 1 results to CSV
         device_name = "GPU" if self.device.type == 'cuda' else "CPU"
         self.save_overhead_data(layers_results, output_dir, device_name)
+        self._print_memory_summary(layers_results, [2, 4, 6, 8, 10, 12],
+                                   'Encrypted layers', f'{device_name} batch=1, layers sweep')
 
         # Now analyze with batch size 64
         self.batch_size = 64
@@ -956,7 +1034,9 @@ class InferenceOverheadAnalyzer:
 
         # Save batch size 64 results to CSV with suffix
         self.save_overhead_data(layers_results_batch64, output_dir, f"{device_name}_batch64")
-        
+        self._print_memory_summary(layers_results_batch64, [2, 4, 6, 8, 10, 12],
+                                   'Encrypted layers', f'{device_name} batch=64, layers sweep')
+
         # Restore original batch size
         self.batch_size = original_batch_size
 
