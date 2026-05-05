@@ -25,7 +25,7 @@ from src.encryption.arnold_transform import arnold_optimized, get_standard_key
 from src.encryption.xor_encryption import xor_encrypt_decrypt
 
 TITLE_FONTSIZE = 16
-LABEL_FONTSIZE = 16
+LABEL_FONTSIZE = 20
 FONT_CANDIDATES = ["Calibri", "Carlito", "Liberation Sans", "DejaVu Sans", "Noto Sans CJK SC"]
 
 
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
 
     # Plot 2x3 grid: rows = images, cols = [original, ACM, diffusion]
     fig, axes = plt.subplots(2, 3, figsize=(9, 6))
-    titles = ["Original", "ACM-encrypted", "Diffusion-encrypted"]
+    titles = ["Original", "Permutation Only", "Permutation + Diffusion"]
 
     for row, (o, a, d, label) in enumerate(
         [(orig1, acm1, diff1, "Image 1"), (orig2, acm2, diff2, "Image 2")]
