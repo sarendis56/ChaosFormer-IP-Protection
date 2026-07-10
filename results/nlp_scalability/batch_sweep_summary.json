@@ -1,0 +1,126 @@
+{
+  "opt13": {
+    "base": [
+      {
+        "batch_size": 8,
+        "baseline_seconds": 0.6026535420678556,
+        "authorized_seconds": 0.6927842909935862,
+        "overhead_ratio": 1.1495564908097435,
+        "peak_gpu_memory_bytes": 4185874432
+      },
+      {
+        "batch_size": 16,
+        "baseline_seconds": 0.5649185760412365,
+        "authorized_seconds": 0.6123784780502319,
+        "overhead_ratio": 1.0840119337933243,
+        "peak_gpu_memory_bytes": 5731317760
+      },
+      {
+        "batch_size": 32,
+        "baseline_seconds": 0.5701026120223105,
+        "authorized_seconds": 0.5943038689438254,
+        "overhead_ratio": 1.0424507034543595,
+        "peak_gpu_memory_bytes": 8818522112
+      },
+      {
+        "batch_size": 64,
+        "baseline_seconds": 0.5685517461970448,
+        "authorized_seconds": 0.5816642139106989,
+        "overhead_ratio": 1.0230629275195464,
+        "peak_gpu_memory_bytes": 14996600832
+      }
+    ],
+    "secure": [
+      {
+        "batch_size": 8,
+        "baseline_seconds": 0.6086936050560325,
+        "authorized_seconds": 0.7179924307856709,
+        "overhead_ratio": 1.179562960448019,
+        "peak_gpu_memory_bytes": 4185874432
+      },
+      {
+        "batch_size": 16,
+        "baseline_seconds": 0.5708770868368447,
+        "authorized_seconds": 0.621033410076052,
+        "overhead_ratio": 1.0878583575969336,
+        "peak_gpu_memory_bytes": 5731317760
+      },
+      {
+        "batch_size": 32,
+        "baseline_seconds": 0.5752721470780671,
+        "authorized_seconds": 0.6032482881564647,
+        "overhead_ratio": 1.0486311413137148,
+        "peak_gpu_memory_bytes": 8818522112
+      },
+      {
+        "batch_size": 64,
+        "baseline_seconds": 0.5741910680662841,
+        "authorized_seconds": 0.5867425510659814,
+        "overhead_ratio": 1.021859418750569,
+        "peak_gpu_memory_bytes": 14996600832
+      }
+    ]
+  },
+  "opt67": {
+    "base": [
+      {
+        "batch_size": 8,
+        "baseline_seconds": 2.383409345988184,
+        "authorized_seconds": 2.7685495829209685,
+        "overhead_ratio": 1.1615921484830385,
+        "peak_gpu_memory_bytes": 14871699456
+      },
+      {
+        "batch_size": 16,
+        "baseline_seconds": 2.6699889909941703,
+        "authorized_seconds": 2.8659920510835946,
+        "overhead_ratio": 1.07340968848581,
+        "peak_gpu_memory_bytes": 16417142784
+      },
+      {
+        "batch_size": 32,
+        "baseline_seconds": 2.7457654899917543,
+        "authorized_seconds": 2.885296310065314,
+        "overhead_ratio": 1.0508167287345356,
+        "peak_gpu_memory_bytes": 19504347136
+      },
+      {
+        "batch_size": 64,
+        "baseline_seconds": 2.7500398939009756,
+        "authorized_seconds": 2.8342761320527643,
+        "overhead_ratio": 1.0306309149691273,
+        "peak_gpu_memory_bytes": 25682425856
+      }
+    ],
+    "secure": [
+      {
+        "batch_size": 8,
+        "baseline_seconds": 2.426162959076464,
+        "authorized_seconds": 2.890410046093166,
+        "overhead_ratio": 1.1913503317161436,
+        "peak_gpu_memory_bytes": 14871699456
+      },
+      {
+        "batch_size": 16,
+        "baseline_seconds": 2.7679679449647665,
+        "authorized_seconds": 2.9777032940182835,
+        "overhead_ratio": 1.075772318619169,
+        "peak_gpu_memory_bytes": 16417142784
+      },
+      {
+        "batch_size": 32,
+        "baseline_seconds": 2.8432940910570323,
+        "authorized_seconds": 2.9992831039708108,
+        "overhead_ratio": 1.0548620747338124,
+        "peak_gpu_memory_bytes": 19504347136
+      },
+      {
+        "batch_size": 64,
+        "baseline_seconds": 2.847044583875686,
+        "authorized_seconds": 2.959621438058093,
+        "overhead_ratio": 1.0395416548163627,
+        "peak_gpu_memory_bytes": 25682425856
+      }
+    ]
+  }
+}

@@ -9,45 +9,45 @@
   "encrypted_parameters": 1207959552,
   "dtype": "torch.float16",
   "sequence_length": 256,
-  "batch_size": 16,
+  "batch_size": 64,
   "baseline": {
     "metric_name": "perplexity",
-    "metric_value": 104941.80943700565,
-    "elapsed_seconds": 2.7679679449647665,
+    "metric_value": 110592.64192251157,
+    "elapsed_seconds": 2.847044583875686,
     "samples": 128,
     "finite_logits_fraction": 1.0
   },
   "unauthorized": {
     "metric_name": "perplexity",
     "metric_value": 50272.11370846174,
-    "elapsed_seconds": 2.0895845589693636,
+    "elapsed_seconds": 2.1907547388691455,
     "samples": 128,
     "finite_logits_fraction": 0.0
   },
   "authorized": {
     "metric_name": "perplexity",
-    "metric_value": 104941.80943700565,
-    "elapsed_seconds": 2.9777032940182835,
+    "metric_value": 110592.64192251157,
+    "elapsed_seconds": 2.959621438058093,
     "samples": 128,
     "finite_logits_fraction": 1.0
   },
   "timing_repeats": 5,
   "baseline_elapsed_trials": [
-    2.7298094420693815,
-    2.744431216036901,
-    2.7679679449647665,
-    2.772737602936104,
-    2.7869597850367427
+    2.8229325918946415,
+    2.818518988788128,
+    2.847044583875686,
+    2.85009149601683,
+    2.8489398951642215
   ],
   "authorized_elapsed_trials": [
-    2.9588402279186994,
-    2.964034255128354,
-    2.9777032940182835,
-    2.984827268170193,
-    2.995438393903896
+    2.9170675929635763,
+    2.9374573649838567,
+    2.959621438058093,
+    2.962117937160656,
+    2.969234434189275
   ],
-  "authorized_overhead_ratio": 1.075772318619169,
-  "encryption_seconds": 0.3476381148211658,
-  "decryption_seconds": 0.01800674805417657,
-  "peak_gpu_memory_bytes": 16417142784
+  "authorized_overhead_ratio": 1.0395416548163627,
+  "encryption_seconds": 0.34898797795176506,
+  "decryption_seconds": 0.01642656303010881,
+  "peak_gpu_memory_bytes": 25682425856
 }
