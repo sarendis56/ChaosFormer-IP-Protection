@@ -1,0 +1,37 @@
+{
+  "model": "textattack/roberta-base-SST-2",
+  "task": "sst2",
+  "mode": "base",
+  "model_parameters": 124647170,
+  "total_layers": 12,
+  "encrypted_layers": 6,
+  "encrypted_parameters": 42467328,
+  "dtype": "torch.float16",
+  "sequence_length": 128,
+  "baseline": {
+    "metric_name": "accuracy",
+    "metric_value": 0.9403669724770642,
+    "elapsed_seconds": 0.19080683309584856,
+    "samples": 872,
+    "finite_logits_fraction": 1.0
+  },
+  "unauthorized": {
+    "metric_name": "accuracy",
+    "metric_value": 0.5091743119266054,
+    "elapsed_seconds": 0.16732149594463408,
+    "samples": 872,
+    "finite_logits_fraction": 1.0
+  },
+  "authorized": {
+    "metric_name": "accuracy",
+    "metric_value": 0.9403669724770642,
+    "elapsed_seconds": 0.20963685889728367,
+    "samples": 872,
+    "finite_logits_fraction": 1.0
+  },
+  "authorized_overhead_ratio": 1.0986863284501776,
+  "encryption_seconds": 0.31633099797181785,
+  "decryption_seconds": 0.0016183799598366022,
+  "peak_gpu_memory_bytes": 336019968,
+  "random_init": false
+}

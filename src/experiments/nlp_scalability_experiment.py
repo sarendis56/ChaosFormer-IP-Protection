@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -166,14 +167,24 @@ def run(args: argparse.Namespace) -> dict:
 
     if args.task == "sst2":
         model = AutoModelForSequenceClassification.from_pretrained(
-            args.model, torch_dtype=dtype
+            args.model, dtype=dtype
         ).to(device)
         batches = list(_sst2_batches(tokenizer, args.samples, args.batch_size))
         evaluator = evaluate_sst2
     else:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model, torch_dtype=dtype, low_cpu_mem_usage=True
-        ).to(device)
+        if args.random_init:
+            config = AutoConfig.from_pretrained(args.model)
+            previous_dtype = torch.get_default_dtype()
+            torch.set_default_dtype(dtype)
+            try:
+                with torch.device(device):
+                    model = AutoModelForCausalLM.from_config(config)
+            finally:
+                torch.set_default_dtype(previous_dtype)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model, dtype=dtype, low_cpu_mem_usage=True
+            ).to(device)
         batches = _causal_batches(tokenizer, args.samples, args.sequence_length)
         evaluator = evaluate_causal
     model.eval()
@@ -212,6 +223,7 @@ def run(args: argparse.Namespace) -> dict:
         "model": args.model,
         "task": args.task,
         "mode": args.mode,
+        "random_init": args.random_init,
         "model_parameters": sum(parameter.numel() for parameter in model.parameters()),
         "total_layers": total_layers,
         "encrypted_layers": (
@@ -245,6 +257,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--sequence-length", type=int, default=256)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--random-init",
+        action="store_true",
+        help="instantiate the official architecture without pretrained weights; "
+        "intended only for runtime and memory scaling measurements",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = run(args)
