@@ -2,36 +2,52 @@
   "model": "textattack/roberta-base-SST-2",
   "task": "sst2",
   "mode": "secure",
+  "random_init": false,
   "model_parameters": 124647170,
   "total_layers": 12,
   "encrypted_layers": 12,
   "encrypted_parameters": 84934656,
   "dtype": "torch.float16",
   "sequence_length": 128,
+  "batch_size": 64,
   "baseline": {
     "metric_name": "accuracy",
     "metric_value": 0.9403669724770642,
-    "elapsed_seconds": 0.19069130788557231,
+    "elapsed_seconds": 0.16240109410136938,
     "samples": 872,
     "finite_logits_fraction": 1.0
   },
   "unauthorized": {
     "metric_name": "accuracy",
     "metric_value": 0.4908256880733945,
-    "elapsed_seconds": 0.1590410980861634,
+    "elapsed_seconds": 0.14512759703211486,
     "samples": 872,
     "finite_logits_fraction": 0.0
   },
   "authorized": {
     "metric_name": "accuracy",
     "metric_value": 0.9403669724770642,
-    "elapsed_seconds": 0.3939152651000768,
+    "elapsed_seconds": 0.21030247281305492,
     "samples": 872,
     "finite_logits_fraction": 1.0
   },
-  "authorized_overhead_ratio": 2.0657221845499776,
-  "encryption_seconds": 0.3294091068673879,
-  "decryption_seconds": 0.0050651091150939465,
-  "peak_gpu_memory_bytes": 336167424,
-  "random_init": false
+  "timing_repeats": 5,
+  "baseline_elapsed_trials": [
+    0.16604157397523522,
+    0.16287894314154983,
+    0.16181018389761448,
+    0.16240109410136938,
+    0.16148612718097866
+  ],
+  "authorized_elapsed_trials": [
+    0.21396203199401498,
+    0.20785795198753476,
+    0.21030247281305492,
+    0.21165745193138719,
+    0.20866093109361827
+  ],
+  "authorized_overhead_ratio": 1.294957241370467,
+  "encryption_seconds": 0.329235051991418,
+  "decryption_seconds": 0.0049350999761372805,
+  "peak_gpu_memory_bytes": 406487552
 }

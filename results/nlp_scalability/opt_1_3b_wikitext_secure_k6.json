@@ -2,36 +2,52 @@
   "model": "facebook/opt-1.3b",
   "task": "causal",
   "mode": "secure",
+  "random_init": false,
   "model_parameters": 1315758080,
   "total_layers": 24,
   "encrypted_layers": 6,
   "encrypted_parameters": 301989888,
   "dtype": "torch.float16",
   "sequence_length": 256,
+  "batch_size": 64,
   "baseline": {
     "metric_name": "perplexity",
-    "metric_value": 26.563403668434283,
-    "elapsed_seconds": 1.0288500778842717,
+    "metric_value": 26.562839820908508,
+    "elapsed_seconds": 0.5667695668525994,
     "samples": 128,
     "finite_logits_fraction": 1.0
   },
   "unauthorized": {
     "metric_name": "perplexity",
-    "metric_value": 50272.01782210583,
-    "elapsed_seconds": 0.9595185040961951,
+    "metric_value": 50272.11370846174,
+    "elapsed_seconds": 0.48872172296978533,
     "samples": 128,
     "finite_logits_fraction": 0.0
   },
   "authorized": {
     "metric_name": "perplexity",
-    "metric_value": 26.563403668434283,
-    "elapsed_seconds": 1.9314031801186502,
+    "metric_value": 26.562839820908508,
+    "elapsed_seconds": 0.5773792318068445,
     "samples": 128,
     "finite_logits_fraction": 1.0
   },
-  "authorized_overhead_ratio": 1.87724452924219,
-  "encryption_seconds": 0.3281202199868858,
-  "decryption_seconds": 0.0037554840091615915,
-  "peak_gpu_memory_bytes": 2833482752,
-  "random_init": false
+  "timing_repeats": 5,
+  "baseline_elapsed_trials": [
+    0.5665253479965031,
+    0.5667695668525994,
+    0.5700457580387592,
+    0.5685924019198865,
+    0.5664671629201621
+  ],
+  "authorized_elapsed_trials": [
+    0.5763172120787203,
+    0.5797151271253824,
+    0.5764309337828308,
+    0.580596855841577,
+    0.5773792318068445
+  ],
+  "authorized_overhead_ratio": 1.0187195389003736,
+  "encryption_seconds": 0.3298795979935676,
+  "decryption_seconds": 0.004249516874551773,
+  "peak_gpu_memory_bytes": 14996600832
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -58,7 +59,7 @@ def _sst2_batches(tokenizer, max_samples: int, batch_size: int) -> Iterator[dict
 
 
 def _causal_batches(
-    tokenizer, max_sequences: int, sequence_length: int
+    tokenizer, max_sequences: int, sequence_length: int, batch_size: int
 ) -> list[dict]:
     dataset = load_dataset(
         "wikitext", "wikitext-103-raw-v1", split="test", streaming=True
@@ -74,16 +75,21 @@ def _causal_batches(
             break
     if len(token_ids) < required:
         raise RuntimeError("WikiText stream did not provide enough tokens")
-    batches = []
+    sequences = []
     for offset in range(0, max_sequences * sequence_length, sequence_length):
         ids = torch.tensor(token_ids[offset : offset + sequence_length + 1])
-        batches.append(
-            {
-                "input_ids": ids[:-1].unsqueeze(0),
-                "labels": ids[1:].unsqueeze(0),
-            }
-        )
-    return batches
+        sequences.append((ids[:-1], ids[1:]))
+    return [
+        {
+            "input_ids": torch.stack(
+                [item[0] for item in sequences[start : start + batch_size]]
+            ),
+            "labels": torch.stack(
+                [item[1] for item in sequences[start : start + batch_size]]
+            ),
+        }
+        for start in range(0, len(sequences), batch_size)
+    ]
 
 
 @torch.inference_mode()
@@ -142,8 +148,31 @@ def evaluate_causal(model, batches, device: torch.device) -> Evaluation:
         "perplexity",
         perplexity,
         time.perf_counter() - start,
-        len(batches),
+        sum(batch["input_ids"].shape[0] for batch in batches),
         finite / logits_count,
+    )
+
+
+def _evaluate_repeated(
+    evaluator, model, batches, device: torch.device, repeats: int
+) -> tuple[Evaluation, list[float]]:
+    runs = [evaluator(model, batches, device) for _ in range(repeats)]
+    first = runs[0]
+    for run in runs[1:]:
+        if not math.isclose(run.metric_value, first.metric_value, rel_tol=1e-9):
+            raise RuntimeError("evaluation metric changed across timing repeats")
+        if run.finite_logits_fraction != first.finite_logits_fraction:
+            raise RuntimeError("finite-logit fraction changed across timing repeats")
+    elapsed = [run.elapsed_seconds for run in runs]
+    return (
+        Evaluation(
+            first.metric_name,
+            first.metric_value,
+            statistics.median(elapsed),
+            first.samples,
+            first.finite_logits_fraction,
+        ),
+        elapsed,
     )
 
 
@@ -185,14 +214,18 @@ def run(args: argparse.Namespace) -> dict:
             model = AutoModelForCausalLM.from_pretrained(
                 args.model, dtype=dtype, low_cpu_mem_usage=True
             ).to(device)
-        batches = _causal_batches(tokenizer, args.samples, args.sequence_length)
+        batches = _causal_batches(
+            tokenizer, args.samples, args.sequence_length, args.batch_size
+        )
         evaluator = evaluate_causal
     model.eval()
 
     # Warm up lazy CUDA kernels without including compilation in measurements.
     warmup = batches[:1]
     evaluator(model, warmup, device)
-    baseline = evaluator(model, batches, device)
+    baseline, baseline_trials = _evaluate_repeated(
+        evaluator, model, batches, device, args.timing_repeats
+    )
 
     if hasattr(model, "roberta"):
         total_layers = len(model.roberta.encoder.layer)
@@ -212,7 +245,9 @@ def run(args: argparse.Namespace) -> dict:
     unauthorized = evaluator(model, batches, device)
 
     with cipher.authorized_inference():
-        authorized = evaluator(model, batches, device)
+        authorized, authorized_trials = _evaluate_repeated(
+            evaluator, model, batches, device, args.timing_repeats
+        )
 
     _sync(device)
     start = time.perf_counter()
@@ -232,9 +267,13 @@ def run(args: argparse.Namespace) -> dict:
         "encrypted_parameters": cipher.encrypted_parameter_count,
         "dtype": str(dtype),
         "sequence_length": args.sequence_length if args.task == "causal" else 128,
+        "batch_size": args.batch_size,
         "baseline": asdict(baseline),
         "unauthorized": asdict(unauthorized),
         "authorized": asdict(authorized),
+        "timing_repeats": args.timing_repeats,
+        "baseline_elapsed_trials": baseline_trials,
+        "authorized_elapsed_trials": authorized_trials,
         "authorized_overhead_ratio": (
             authorized.elapsed_seconds / baseline.elapsed_seconds
         ),
@@ -257,6 +296,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--sequence-length", type=int, default=256)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--timing-repeats", type=int, default=5)
     parser.add_argument(
         "--random-init",
         action="store_true",
@@ -265,6 +305,8 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.timing_repeats < 1:
+        parser.error("--timing-repeats must be positive")
     result = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
