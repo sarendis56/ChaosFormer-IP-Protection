@@ -152,6 +152,43 @@ wheels = [
 ]
 
 [[package]]
+name = "bchlib"
+version = "2.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/e8/1265ef5811ecc589f9408ba977dafee21af668eac2504efcb7f619c68af4/bchlib-2.1.3.tar.gz", hash = "sha256:f1c5d2a838259bd505f4c4afbd1187d5751224a4401923a10c5dd4f2e21e2125", size = 27060, upload-time = "2024-09-12T14:33:31.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/3e/23523a067ce0ad97270e3d474f34201b41364a6b35cc67b0a5a9fb155b8a/bchlib-2.1.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:0ba3c8255f4d1aaf4dba90d39e8b31563e5bdf42c9b08660a2c76bacec1814f7", size = 26647, upload-time = "2024-09-12T14:32:11.604Z" },
+    { url = "https://files.pythonhosted.org/packages/42/8f/8a3085f180d3cccac0f9568b1f5b9a0166a4ae651bcb971d215164be4b00/bchlib-2.1.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:08cab7d645613bc486ad547f29e49f51ad1defab20e3c8b3d6b4a6af86d0d673", size = 25483, upload-time = "2024-09-12T14:32:13.129Z" },
+    { url = "https://files.pythonhosted.org/packages/25/1b/d13ae6b3a22e838a7151c2084fb0ec63b3ceec081ef186a199430f2ed883/bchlib-2.1.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ae1aa14cc35bedd0f283f7ad357dc70ae2f6164aa3aa58eee2cb329d0e780d6c", size = 67195, upload-time = "2024-09-12T14:32:14.36Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/00/9dab3023c0ffd6202f9644c5999b1432ace2cd1c9cef84f345ce7e7be2d8/bchlib-2.1.3-cp310-cp310-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:258c2a6e223810e265eb4337da8fe33d4f15ca0ce35c32267c45c5002a187d64", size = 64348, upload-time = "2024-09-12T14:32:15.35Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/e0/2d6c5d804a17b0f199c3af11c6d7cd3ef60ccbbb8addf0d895ba1d574b1e/bchlib-2.1.3-cp310-cp310-musllinux_1_2_i686.whl", hash = "sha256:ec7036de49578d74c82888af88d0c4fc22ece684de20ddf07b5d1d0b39d542ba", size = 65922, upload-time = "2024-09-12T14:32:16.215Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/e9/1b53cf2f28b77d93772f94c75ae0506cf434f1e51b9f373ef7204087da39/bchlib-2.1.3-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:4669bba18732fc1be06761fec4685a66b194748a3f08cf5afdf541702bd4c5e1", size = 66722, upload-time = "2024-09-12T14:32:20.038Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/ee/e4822747d1de286f3c55dbf9431039181ee1c13fce38f33671c4a039e176/bchlib-2.1.3-cp310-cp310-win32.whl", hash = "sha256:d133db99607be27e16e74ea2a5aca9244e357b5a5f1580e418143929f99cd0bb", size = 23951, upload-time = "2024-09-12T14:32:21.566Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/36/da15f71d0033cc60e036a3fbd3bd94e4b06287a004e31667c8ec40382502/bchlib-2.1.3-cp310-cp310-win_amd64.whl", hash = "sha256:f70569bd9df1eda7c2dee55d995ec65ee651906a877421525c99f5187d36be24", size = 26408, upload-time = "2024-09-12T14:32:22.437Z" },
+    { url = "https://files.pythonhosted.org/packages/41/4f/60fe80fe4f31e4482549a50e76d89a3699bc307fa3c9c6f4fcd5d03fa095/bchlib-2.1.3-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:64407c0bc8b58ce41399f7f1d52a46c7fa63dc83fa91e70cf84f46b87854e807", size = 26650, upload-time = "2024-09-12T14:32:23.269Z" },
+    { url = "https://files.pythonhosted.org/packages/94/8e/fe8ede184425975df435c2f76afc3f9699ca421254db0d327a814ef7cc93/bchlib-2.1.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:ee67db08c41894cf490de535f4ec54659745ffafbcf37b9f04b18b1e44101d96", size = 25479, upload-time = "2024-09-12T14:32:24.504Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/a9/323622df8151b9f315f3b0cd052f6810dfbb31fefa28741080bd393c6de1/bchlib-2.1.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:80570e504162b330fffd8d9b20679a09eddb3d9edd961159d2bf73e064fb22a2", size = 67337, upload-time = "2024-09-12T14:32:25.787Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/1f/c2e07c9176e57bb3607cf5883f53ffbdaae527d93d374c78a960e3d5b8b5/bchlib-2.1.3-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:5f601388cd8847884eef6d68d14dfb37ae469ad8fa3429b49bbefd663208c1f5", size = 64490, upload-time = "2024-09-12T14:32:27.152Z" },
+    { url = "https://files.pythonhosted.org/packages/40/ee/f3feda657a2f2a70e3626b6ac60b7ac7bce1d6d5df5db4431579aaf111ea/bchlib-2.1.3-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:0ef8ff4bb45d5263702d615ec38662354d8374cfa4db2d9ab7f18f5a29f211e0", size = 66057, upload-time = "2024-09-12T14:32:28.547Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/0d/8ab6e1439fbc37008840139c8a15005022434b5816aa41d7fabd7dffee6a/bchlib-2.1.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:460277205bc29062275159d0221f6b286669a8d8f4c61f8e6ae4eaa7b3091370", size = 66862, upload-time = "2024-09-12T14:32:29.63Z" },
+    { url = "https://files.pythonhosted.org/packages/33/14/55e4341ad56336e9f328439d40a952774c9dd101169ed384815ff30e4ccd/bchlib-2.1.3-cp311-cp311-win32.whl", hash = "sha256:06375176fb7465a9de16a8b3318ba16e4f2ba4edb78cd631e5588521c9661a60", size = 23952, upload-time = "2024-09-12T14:32:30.546Z" },
+    { url = "https://files.pythonhosted.org/packages/13/44/66af22d16d3138a412e696497e46269f1c3ea23c2fee7d923429cec62d6e/bchlib-2.1.3-cp311-cp311-win_amd64.whl", hash = "sha256:1060fecdefc0d9782aa5ef4c82537a60049af45c842d540c16a64fef85c0c44d", size = 26407, upload-time = "2024-09-12T14:32:31.723Z" },
+    { url = "https://files.pythonhosted.org/packages/15/bb/10a7465635936f4fe630c3d6f88a2181e099b9cbe63474ad3a773ff6ee3a/bchlib-2.1.3-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:3edba1ba46b895fcb31b4269e2527a3f69b2a5789a8f34fcd95eacddeedb7758", size = 26684, upload-time = "2024-09-12T14:32:32.896Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/88/7e10f50ff583248f25c354a09475d64f1bad1d678834e8d1ca31e07e07ce/bchlib-2.1.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ec73cbf5d5ef85fc5614b704ab71b4e7d7de41a762c93fda1a96dc8c0a98d8c3", size = 25468, upload-time = "2024-09-12T14:32:33.734Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/21/d1578d2c1d2844ec5827e68382426eed17863292c78b88f93b03b49ee83c/bchlib-2.1.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8397acef706f069c096a379ab3b56de650e9d64f8b54dea6af53e48a0406656d", size = 67992, upload-time = "2024-09-12T14:32:35.225Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/57/476f8023d623250d5fa8f4b62d9b177e6277a2f51c73d0fa8c7dd7a95344/bchlib-2.1.3-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6c3c0c08c3eb114c4fa782c4c22d9cd197082a5c5fc9e2b7b95036e1af44790f", size = 64899, upload-time = "2024-09-12T14:32:36.651Z" },
+    { url = "https://files.pythonhosted.org/packages/18/54/90f4ac82ee4dd7aafb0c4d06636a131de7cd5eee77c3525ded6b1f28c4ab/bchlib-2.1.3-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:0be4fdcf66cdf91f51126a7139330d983a9bc05289cb142d45b7f7d91019ee22", size = 66446, upload-time = "2024-09-12T14:32:37.59Z" },
+    { url = "https://files.pythonhosted.org/packages/23/ee/af19414b937b99dd06fe46d51ec5d16aeea1772a7210b5d4ef127ecf7ce8/bchlib-2.1.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:f1170738939e2dcde43cb772095412e6368cc6942f143f55b646d5c252d3e7af", size = 67538, upload-time = "2024-09-12T14:32:38.902Z" },
+    { url = "https://files.pythonhosted.org/packages/16/7d/b44466f20cc51a3c31be39211d60da0069642d445f769bde747eeee8db6a/bchlib-2.1.3-cp312-cp312-win32.whl", hash = "sha256:0019affb4dbf9af38ebb1cb813c17140ec3c1af9afc55844bc4b3fab462be145", size = 23985, upload-time = "2024-09-12T14:32:39.793Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/34/50d5533bc78062d6d5daadf7d17dcecca4c08e4794fad8778b432244963c/bchlib-2.1.3-cp312-cp312-win_amd64.whl", hash = "sha256:c469d9c19d0621815dd04e759b842ed218f828a1e1fc5e1c6939944785b335e4", size = 26475, upload-time = "2024-09-12T14:32:40.857Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/28/4a93d0dc485264f2967029d39145d10aa500e9667b5b02d7cda8978c2946/bchlib-2.1.3-pp310-pypy310_pp73-macosx_10_15_x86_64.whl", hash = "sha256:d5125436a420cf386d1c3dde5203c9b4611096aabd0da84b2de04b96d42ba723", size = 24372, upload-time = "2024-09-12T14:33:13.444Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/5d/4ddfabd71f538f583fee3c925ca41d6f4220236545f40f5944481a33cd96/bchlib-2.1.3-pp310-pypy310_pp73-macosx_11_0_arm64.whl", hash = "sha256:7d6dba3d9256b51c8fc3ed1bdbc129bfcda56cfa04d0280b638b9e9364d5bdd0", size = 23565, upload-time = "2024-09-12T14:33:14.311Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/22/61594cd1728e78441d75fd7390ae4184550fe8c46bf7c0cf783e35544174/bchlib-2.1.3-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:85270e5a93681ece506f6b37772f2be404e71d4911cce3fdd539c7f89f0ebdac", size = 23876, upload-time = "2024-09-12T14:33:15.15Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/7d/d530c633966843948e7f02f7e9f4bf94945683b2d1621d4dfddeba6622c1/bchlib-2.1.3-pp310-pypy310_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:6804608aaae5efc858003ab8e69a27c63fde41dfa85f89febd7bc001eef46502", size = 23944, upload-time = "2024-09-12T14:33:15.969Z" },
+    { url = "https://files.pythonhosted.org/packages/57/04/c79d29f30de36dbb9059a6665dc399ecbe3d9c25361ea8aa08ab063f124b/bchlib-2.1.3-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:c9682324fb384008f08432e4b40f044be7a976af24462c5fa56b1fbc6f7abc92", size = 26439, upload-time = "2024-09-12T14:33:17.271Z" },
+]
+
+[[package]]
 name = "bitsandbytes"
 version = "0.49.1"
 source = { registry = "https://pypi.org/simple" }
@@ -182,6 +219,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
+    { name = "bchlib" },
     { name = "bitsandbytes" },
     { name = "datasets" },
     { name = "matplotlib" },
@@ -204,6 +242,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=1.12.0" },
+    { name = "bchlib", specifier = ">=2.1.3" },
     { name = "bitsandbytes", specifier = ">=0.49.1" },
     { name = "datasets", specifier = ">=2.0.0" },
     { name = "matplotlib", specifier = ">=3.5.0" },
