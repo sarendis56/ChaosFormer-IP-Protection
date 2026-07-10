@@ -166,7 +166,7 @@ def write_json(path: Path, value) -> None:
 
 def run_screen(args) -> None:
     device = torch.device(args.device)
-    model, processor = load_vision_model(args.model, device)
+    model, processor = load_vision_model(args.model, device, args.model_path)
     num_layers = len(get_transformer_layers(model))
     if num_layers != 12:
         raise ValueError(f"Preregistration assumes 12 blocks, found {num_layers}")
@@ -234,7 +234,7 @@ def run_screen(args) -> None:
 
 def run_enumeration(args) -> None:
     device = torch.device(args.device)
-    model, processor = load_vision_model(args.model, device)
+    model, processor = load_vision_model(args.model, device, args.model_path)
     loader, indices = make_eval_loader(
         args.data_dir,
         "validation",
@@ -291,6 +291,7 @@ def parse_args():
     parser.add_argument("--action", choices=("manifest", "screen", "enumerate"), required=True)
     parser.add_argument("--model", choices=DEFAULT_MODELS, default=DEFAULT_MODELS[0])
     parser.add_argument("--data-dir", type=Path, default=Path("/data/peichun/imagenet-1k"))
+    parser.add_argument("--model-path", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("results/layer_subset_mechanism"))
     parser.add_argument(
         "--manifest",

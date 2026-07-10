@@ -54,3 +54,25 @@ def test_manifest_records_outcome_independent_full_selection(tmp_path):
 
     assert manifest["full_retraining_selection_rule"]["selection_uses_screening_outcomes"] is False
     assert manifest["full_retraining_selection_rule"]["random_indices"] == [0, 1, 2]
+
+
+def test_retraining_schedule_warms_up_then_decays():
+    from src.experiments.layer_subset_retraining_experiment import cosine_schedule
+
+    values = [cosine_schedule(step, total_steps=100, warmup_steps=10) for step in range(100)]
+    assert values[0] < values[9]
+    assert values[9] == 1.0
+    assert values[10] == 1.0
+    assert values[-1] < values[50]
+    assert values[-1] >= 0.01
+
+
+def test_soft_cross_entropy_accepts_hard_and_mixed_targets():
+    import torch
+    from src.experiments.layer_subset_retraining_experiment import soft_cross_entropy
+
+    logits = torch.tensor([[2.0, 0.0], [0.0, 2.0]])
+    hard = torch.tensor([0, 1])
+    mixed = torch.tensor([[0.75, 0.25], [0.25, 0.75]])
+    assert torch.isfinite(soft_cross_entropy(logits, hard, 0.1))
+    assert torch.isfinite(soft_cross_entropy(logits, mixed, 0.1))

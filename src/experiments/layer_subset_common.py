@@ -206,9 +206,10 @@ def make_eval_loader(
     return loader, indices
 
 
-def load_vision_model(model_name: str, device: torch.device):
-    processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
-    model = AutoModelForImageClassification.from_pretrained(model_name)
+def load_vision_model(model_name: str, device: torch.device, model_path: Path | None = None):
+    source = str(model_path) if model_path is not None else model_name
+    processor = AutoImageProcessor.from_pretrained(source, use_fast=True)
+    model = AutoModelForImageClassification.from_pretrained(source)
     model.to(device).eval()
     return model, processor
 
