@@ -55,6 +55,8 @@ def test_manifest_records_outcome_independent_full_selection(tmp_path):
 
     assert manifest["full_retraining_selection_rule"]["selection_uses_screening_outcomes"] is False
     assert manifest["full_retraining_selection_rule"]["random_indices"] == [0, 1, 2]
+    assert manifest["training_protocol"]["full_deit"]["seeds"] == [4101, 4102, 4103]
+    assert manifest["training_protocol"]["selection_uses_training_outcomes"] is False
 
 
 def test_retraining_schedule_warms_up_then_decays():
@@ -77,3 +79,13 @@ def test_soft_cross_entropy_accepts_hard_and_mixed_targets():
     mixed = torch.tensor([[0.75, 0.25], [0.25, 0.75]])
     assert torch.isfinite(soft_cross_entropy(logits, hard, 0.1))
     assert torch.isfinite(soft_cross_entropy(logits, mixed, 0.1))
+
+
+def test_preregistered_launcher_phase_sizes():
+    from src.experiments.run_layer_subset_study import jobs_for_phase
+
+    assert len(jobs_for_phase("inference")) == 4
+    assert len(jobs_for_phase("short")) == 17
+    assert len(jobs_for_phase("full")) == 18
+    assert len(jobs_for_phase("oracle")) == 6
+    assert len(jobs_for_phase("vit_confirm")) == 6

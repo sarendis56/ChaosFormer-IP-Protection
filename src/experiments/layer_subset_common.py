@@ -144,6 +144,13 @@ def write_preregistration(
             "random_indices": list(full_random_indices),
             "selection_uses_screening_outcomes": False,
         },
+        "training_protocol": {
+            "short_deit": {"epochs": 5, "seeds": [3101], "k": 6},
+            "full_deit": {"epochs": 20, "seeds": [4101, 4102, 4103], "k": 6},
+            "oracle_deit": {"epochs": 5, "seeds": [5101], "k": 6},
+            "vit_confirmation": {"epochs": 20, "seeds": [6101], "k": 6},
+            "selection_uses_training_outcomes": False,
+        },
         "subsets": model_specs,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
