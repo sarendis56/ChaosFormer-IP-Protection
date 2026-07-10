@@ -15,6 +15,7 @@ def test_preregistered_subsets_are_deterministic_and_unique():
     assert first == second
     assert len({(len(spec.layers), spec.layers) for spec in first}) == len(first)
     assert sum(spec.family == "random" for spec in first) == 40
+    assert sum(spec.family == "spread" for spec in first) == 6
     assert all(len(spec.layers) in {4, 6} for spec in first)
 
 

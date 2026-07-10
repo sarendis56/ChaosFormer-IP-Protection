@@ -82,9 +82,9 @@
         "name": "k4_spread_2",
         "family": "spread",
         "layers": [
-          2,
+          0,
           5,
-          8,
+          6,
           11
         ],
         "seed": null
@@ -370,6 +370,19 @@
           5,
           7,
           9,
+          11
+        ],
+        "seed": null
+      },
+      {
+        "name": "k6_spread_2",
+        "family": "spread",
+        "layers": [
+          0,
+          3,
+          4,
+          7,
+          8,
           11
         ],
         "seed": null
@@ -695,9 +708,9 @@
         "name": "k4_spread_2",
         "family": "spread",
         "layers": [
-          2,
+          0,
           5,
-          8,
+          6,
           11
         ],
         "seed": null
@@ -983,6 +996,19 @@
           5,
           7,
           9,
+          11
+        ],
+        "seed": null
+      },
+      {
+        "name": "k6_spread_2",
+        "family": "spread",
+        "layers": [
+          0,
+          3,
+          4,
+          7,
+          8,
           11
         ],
         "seed": null

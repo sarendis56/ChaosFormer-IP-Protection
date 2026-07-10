@@ -88,8 +88,18 @@ def preregistered_subsets(
         starts = sorted({0, (num_layers - k) // 2, num_layers - k})
         for index, start in enumerate(starts):
             add(k, f"k{k}_cluster_{index}", "clustered", range(start, start + k))
-        for index, fraction in enumerate((0.1, 0.5, 0.9)):
-            add(k, f"k{k}_spread_{index}", "spread", _spread_layers(num_layers, k, fraction))
+        spread_candidates = [
+            _spread_layers(num_layers, k, 0.1),
+            _spread_layers(num_layers, k, 0.5),
+        ]
+        edges = np.linspace(0, num_layers, k + 1, dtype=int)
+        alternating = tuple(
+            int(lo if index % 2 == 0 else hi - 1)
+            for index, (lo, hi) in enumerate(zip(edges[:-1], edges[1:]))
+        )
+        spread_candidates.append(alternating)
+        for index, layers in enumerate(spread_candidates):
+            add(k, f"k{k}_spread_{index}", "spread", layers)
 
         rng = random.Random(stable_int(f"{seed}:k={k}"))
         generated = 0
