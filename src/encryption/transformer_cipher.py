@@ -41,6 +41,12 @@ def transformer_layers(model: nn.Module) -> tuple[list[nn.Module], str]:
     if hasattr(model, "roberta"):
         return list(model.roberta.encoder.layer), "roberta"
     if (
+        hasattr(model, "wav2vec2")
+        and hasattr(model.wav2vec2, "encoder")
+        and hasattr(model.wav2vec2.encoder, "layers")
+    ):
+        return list(model.wav2vec2.encoder.layers), "wav2vec2"
+    if (
         hasattr(model, "model")
         and hasattr(model.model, "decoder")
         and hasattr(model.model.decoder, "layers")
@@ -48,7 +54,7 @@ def transformer_layers(model: nn.Module) -> tuple[list[nn.Module], str]:
         return list(model.model.decoder.layers), "opt"
     raise TypeError(
         f"unsupported architecture {type(model).__name__}; "
-        "expected RoBERTa or OPT-style separate Q/K/V projections"
+        "expected RoBERTa, Wav2Vec2, or OPT-style separate Q/K/V projections"
     )
 
 
@@ -61,6 +67,15 @@ def _weight_layouts(family: str) -> list[tuple[str, str]]:
             ("attention.output.dense.weight", "square"),
             ("intermediate.dense.weight", "ffn_columns"),
             ("output.dense.weight", "ffn_rows"),
+        ]
+    if family == "wav2vec2":
+        return [
+            ("attention.q_proj.weight", "square"),
+            ("attention.k_proj.weight", "square"),
+            ("attention.v_proj.weight", "square"),
+            ("attention.out_proj.weight", "square"),
+            ("feed_forward.intermediate_dense.weight", "ffn_columns"),
+            ("feed_forward.output_dense.weight", "ffn_rows"),
         ]
     if family == "opt":
         return [

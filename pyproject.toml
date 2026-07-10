@@ -21,4 +21,6 @@ dependencies = [
     "tqdm>=4.62.0",
     "transformers>=4.20.0",
     "triton>=3.4.0",
+    "jiwer>=4.0.0",
+    "soundfile>=0.13.1",
 ]

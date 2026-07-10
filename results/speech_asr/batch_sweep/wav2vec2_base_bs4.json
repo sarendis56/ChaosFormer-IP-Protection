@@ -1,0 +1,55 @@
+{
+  "model": "facebook/wav2vec2-base-960h",
+  "dataset": "openslr/librispeech_asr",
+  "dataset_config": "clean",
+  "split": "test",
+  "mode": "base",
+  "model_parameters": 94396320,
+  "total_layers": 12,
+  "encrypted_layers": 6,
+  "encrypted_parameters": 42467328,
+  "dtype": "torch.float16",
+  "batch_size": 4,
+  "dataset_metadata": {
+    "utterances": 2620,
+    "audio_seconds": 19452.480624999997,
+    "batches": 655
+  },
+  "baseline": {
+    "word_error_rate": 0.03387477175897748,
+    "elapsed_seconds": 6.080228739883751,
+    "utterances": 2620,
+    "finite_logits_fraction": 1.0
+  },
+  "unauthorized": {
+    "word_error_rate": 1.0,
+    "elapsed_seconds": 5.520852237939835,
+    "utterances": 2620,
+    "finite_logits_fraction": 1.0
+  },
+  "authorized": {
+    "word_error_rate": 0.03387477175897748,
+    "elapsed_seconds": 7.7082147798500955,
+    "utterances": 2620,
+    "finite_logits_fraction": 1.0
+  },
+  "timing_repeats": 5,
+  "baseline_elapsed_trials": [
+    11.102419886970893,
+    6.080228739883751,
+    6.22390028485097,
+    6.012408355018124,
+    5.9474838469177485
+  ],
+  "authorized_elapsed_trials": [
+    7.848377803107724,
+    7.648086124798283,
+    7.7082147798500955,
+    7.864564454881474,
+    7.60195683198981
+  ],
+  "authorized_overhead_ratio": 1.2677507885990273,
+  "encryption_seconds": 0.32038106792606413,
+  "decryption_seconds": 0.0019148329738527536,
+  "peak_gpu_memory_bytes": 1586247680
+}
