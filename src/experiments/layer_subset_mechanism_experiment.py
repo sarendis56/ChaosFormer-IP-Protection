@@ -248,6 +248,7 @@ def run_enumeration(args) -> None:
     clean = collect_outputs(model, batches, device, hidden=False)
     bank = LayerVariantBank(model, args.seed, device)
     output_dir = args.output_dir / args.model.replace("/", "__")
+    output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "subset_enumeration.jsonl"
     completed = set()
     if path.exists() and not args.force:
