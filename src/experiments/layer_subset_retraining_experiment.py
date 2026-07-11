@@ -233,6 +233,8 @@ def train(args) -> None:
     bank.apply(subset.layers)
     if args.attacker == "oracle_reinit":
         reinitialize_selected(model, bank, subset.layers)
+    # Keep all stochastic training choices identical across blind and oracle conditions.
+    seed_everything(args.seed)
 
     train_loader, train_indices, train_examples = make_train_loader(args, processor, args.seed)
     validation_loader, validation_indices = make_eval_loader(

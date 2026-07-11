@@ -56,6 +56,7 @@ def test_manifest_records_outcome_independent_full_selection(tmp_path):
     assert manifest["full_retraining_selection_rule"]["selection_uses_screening_outcomes"] is False
     assert manifest["full_retraining_selection_rule"]["random_indices"] == [0, 1, 2]
     assert manifest["training_protocol"]["full_deit"]["seeds"] == [4101, 4102, 4103]
+    assert manifest["training_protocol"]["oracle_deit"]["seeds"] == [3101]
     assert manifest["training_protocol"]["selection_uses_training_outcomes"] is False
 
 

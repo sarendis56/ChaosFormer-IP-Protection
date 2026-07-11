@@ -41,7 +41,7 @@
     "oracle_deit": {
       "epochs": 5,
       "seeds": [
-        5101
+        3101
       ],
       "k": 6
     },

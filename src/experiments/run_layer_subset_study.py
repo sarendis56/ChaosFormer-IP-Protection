@@ -106,7 +106,7 @@ def jobs_for_phase(phase: str) -> list[Job]:
         ]
     if phase == "oracle":
         return [
-            retraining_job(DEIT, subset, "oracle_reinit", "oracle", 5, 5101)
+            retraining_job(DEIT, subset, "oracle_reinit", "oracle", 5, 3101)
             for subset in FULL_SUBSETS
         ]
     if phase == "vit_confirm":
