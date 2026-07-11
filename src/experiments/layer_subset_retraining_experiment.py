@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 import torch
+from datasets import load_dataset
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -20,12 +21,9 @@ from tqdm import tqdm
 from src.experiments.layer_subset_common import (
     LayerVariantBank,
     SubsetSpec,
-    imagenet_files,
     layer_subset_descriptors,
-    load_imagenet_split,
     load_vision_model,
     make_eval_loader,
-    stratified_indices,
 )
 from src.utils.vision_backbone_utils import get_layer_weight_views
 
@@ -80,15 +78,34 @@ def image_size(processor) -> tuple[int, int]:
 
 
 def make_train_loader(args, processor, seed: int):
-    dataset = load_imagenet_split(args.data_dir, "train")
-    subset_size = int(round(args.train_fraction * len(dataset)))
+    shard_manifest = json.loads(args.train_shard_manifest.read_text())
+    shard_names = shard_manifest["files"]
+    shard_paths = [args.data_dir / "data" / name for name in shard_names]
+    missing = [str(path) for path in shard_paths if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing {len(missing)} preregistered train shards; first: {missing[0]}")
+    dataset = load_dataset(
+        "parquet",
+        data_files=[str(path) for path in shard_paths],
+        split="train",
+    )
+    candidate_pool_examples = len(dataset)
+    subset_size = int(args.train_examples)
+    if candidate_pool_examples < subset_size:
+        raise RuntimeError(
+            f"Preregistered pool has {candidate_pool_examples} rows, fewer than {subset_size}"
+        )
+    shard_sha = __import__("hashlib").sha256(
+        "\n".join(shard_names).encode("utf-8")
+    ).hexdigest()
     index_dir = args.data_dir / "subsets"
     index_dir.mkdir(parents=True, exist_ok=True)
-    index_path = index_dir / f"train_{args.train_fraction:.4f}_seed{args.data_seed}.npy"
+    index_path = index_dir / f"train_n{subset_size}_seed{args.data_seed}_{shard_sha[:12]}.npy"
     if index_path.exists():
         indices = np.load(index_path).astype(np.int64).tolist()
     else:
-        indices = stratified_indices(dataset["label"], subset_size, args.data_seed)
+        rng = np.random.default_rng(args.data_seed)
+        indices = rng.choice(candidate_pool_examples, size=subset_size, replace=False).tolist()
         np.save(index_path, np.asarray(indices, dtype=np.int32))
     if len(indices) != subset_size:
         raise RuntimeError(f"Expected {subset_size} train indices, found {len(indices)}")
@@ -138,7 +155,7 @@ def make_train_loader(args, processor, seed: int):
         worker_init_fn=worker_init,
         drop_last=True,
     )
-    return loader, indices, len(dataset)
+    return loader, indices, len(dataset), candidate_pool_examples, shard_sha
 
 
 def make_batch_mixer(num_classes: int):
@@ -236,7 +253,13 @@ def train(args) -> None:
     # Keep all stochastic training choices identical across blind and oracle conditions.
     seed_everything(args.seed)
 
-    train_loader, train_indices, train_examples = make_train_loader(args, processor, args.seed)
+    (
+        train_loader,
+        train_indices,
+        train_examples,
+        candidate_pool_examples,
+        train_shard_sha,
+    ) = make_train_loader(args, processor, args.seed)
     validation_loader, validation_indices = make_eval_loader(
         args.data_dir,
         "validation",
@@ -363,6 +386,8 @@ def train(args) -> None:
         "encryption_seed": args.encryption_seed,
         "train_fraction": args.train_fraction,
         "train_examples": train_examples,
+        "train_candidate_pool_examples": candidate_pool_examples,
+        "train_shard_manifest_sha256": train_shard_sha,
         "train_indices_sha256": __import__("hashlib").sha256(
             np.asarray(train_indices, dtype=np.int32).tobytes()
         ).hexdigest(),
@@ -428,6 +453,13 @@ def parse_args():
     parser.add_argument("--data-seed", type=int, default=20260711)
     parser.add_argument("--encryption-seed", type=int, default=20260711)
     parser.add_argument("--train-fraction", type=float, default=0.2)
+    parser.add_argument("--train-examples", type=int, default=256233)
+    parser.add_argument(
+        "--train-shard-manifest",
+        type=Path,
+        default=Path("results/layer_subset_mechanism/train_shard_preregistration.json"),
+    )
+
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--num-workers", type=int, default=8)

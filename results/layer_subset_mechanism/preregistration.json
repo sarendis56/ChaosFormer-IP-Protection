@@ -21,6 +21,14 @@
     ],
     "selection_uses_screening_outcomes": false
   },
+  "training_data_protocol": {
+    "dataset_revision": "49e2ee26f3810fb5a7536bbf732a7b07389a47b5",
+    "population_examples": 1281167,
+    "attacker_examples": 256233,
+    "candidate_shards": 60,
+    "candidate_shard_selection": "deterministic random sample before retraining",
+    "seed": 20260711
+  },
   "training_protocol": {
     "short_deit": {
       "epochs": 5,

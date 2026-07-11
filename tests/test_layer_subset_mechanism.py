@@ -2,6 +2,7 @@ import json
 
 from src.experiments.layer_subset_common import (
     layer_subset_descriptors,
+    preregistered_imagenet_shards,
     preregistered_subsets,
     stratified_indices,
     write_preregistration,
@@ -100,3 +101,11 @@ def test_analysis_helpers_summarize_and_correlate():
     assert summary["count"] == 3
     assert summary["y"]["mean"] == 4
     assert correlation(rows, "x", "y")["spearman_rho"] == 1.0
+
+
+def test_imagenet_shard_preregistration_is_unique_and_deterministic():
+    first = preregistered_imagenet_shards(seed=20260711)
+    second = preregistered_imagenet_shards(seed=20260711)
+    assert first == second
+    assert len(first) == len(set(first)) == 60
+    assert all(name.startswith("train-") and name.endswith("-of-00294.parquet") for name in first)

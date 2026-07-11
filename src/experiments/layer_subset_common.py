@@ -117,6 +117,16 @@ def preregistered_subsets(
     return specs
 
 
+def preregistered_imagenet_shards(
+    total_shards: int = 294,
+    selected_shards: int = 60,
+    seed: int = 20260711,
+) -> list[str]:
+    rng = random.Random(stable_int(f"{seed}:imagenet-train-shards"))
+    indices = sorted(rng.sample(range(total_shards), selected_shards))
+    return [f"train-{index:05d}-of-{total_shards:05d}.parquet" for index in indices]
+
+
 def write_preregistration(
     path: Path,
     *,
@@ -143,6 +153,14 @@ def write_preregistration(
             "spread": "middle structural control",
             "random_indices": list(full_random_indices),
             "selection_uses_screening_outcomes": False,
+        },
+        "training_data_protocol": {
+            "dataset_revision": "49e2ee26f3810fb5a7536bbf732a7b07389a47b5",
+            "population_examples": 1281167,
+            "attacker_examples": 256233,
+            "candidate_shards": 60,
+            "candidate_shard_selection": "deterministic random sample before retraining",
+            "seed": seed,
         },
         "training_protocol": {
             "short_deit": {"epochs": 5, "seeds": [3101], "k": 6},
