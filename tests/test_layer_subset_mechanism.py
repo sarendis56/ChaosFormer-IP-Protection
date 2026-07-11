@@ -90,3 +90,13 @@ def test_preregistered_launcher_phase_sizes():
     assert len(jobs_for_phase("full")) == 18
     assert len(jobs_for_phase("oracle")) == 6
     assert len(jobs_for_phase("vit_confirm")) == 6
+
+
+def test_analysis_helpers_summarize_and_correlate():
+    from src.experiments.analyze_layer_subset_study import aggregate, correlation
+
+    rows = [{"x": 1, "y": 2}, {"x": 2, "y": 4}, {"x": 3, "y": 6}]
+    summary = aggregate(rows, ("y",))
+    assert summary["count"] == 3
+    assert summary["y"]["mean"] == 4
+    assert correlation(rows, "x", "y")["spearman_rho"] == 1.0
