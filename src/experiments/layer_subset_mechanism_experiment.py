@@ -291,7 +291,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--action", choices=("manifest", "screen", "enumerate"), required=True)
     parser.add_argument("--model", choices=DEFAULT_MODELS, default=DEFAULT_MODELS[0])
-    parser.add_argument("--data-dir", type=Path, default=Path("/data/peichun/imagenet-1k"))
+    parser.add_argument("--data-dir", type=Path, default=Path("data/imagenet-1k"))
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("results/layer_subset_mechanism"))
     parser.add_argument(

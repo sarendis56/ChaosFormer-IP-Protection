@@ -438,7 +438,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--device", required=True)
-    parser.add_argument("--data-dir", type=Path, default=Path("/data/peichun/imagenet-1k"))
+    parser.add_argument("--data-dir", type=Path, default=Path("data/imagenet-1k"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/layer_subset_retraining"))
     parser.add_argument(
         "--manifest",

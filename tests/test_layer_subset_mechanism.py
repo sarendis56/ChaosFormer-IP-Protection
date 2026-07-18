@@ -84,13 +84,28 @@ def test_soft_cross_entropy_accepts_hard_and_mixed_targets():
 
 
 def test_preregistered_launcher_phase_sizes():
-    from src.experiments.run_layer_subset_study import jobs_for_phase
+    from pathlib import Path
+
+    from src.experiments.run_layer_subset_study import DEIT, jobs_for_phase
 
     assert len(jobs_for_phase("inference")) == 4
     assert len(jobs_for_phase("short")) == 17
     assert len(jobs_for_phase("full")) == 18
     assert len(jobs_for_phase("oracle")) == 6
     assert len(jobs_for_phase("vit_confirm")) == 6
+
+    default_command = jobs_for_phase("short")[0].command
+    assert "/data/peichun" not in " ".join(default_command)
+    assert "--model-path" not in default_command
+
+    local_path = Path("models/deit")
+    local_command = jobs_for_phase(
+        "short",
+        model_paths={DEIT: local_path},
+        data_dir=Path("datasets/imagenet-1k"),
+    )[0].command
+    assert local_command[local_command.index("--model-path") + 1] == str(local_path)
+    assert local_command[local_command.index("--data-dir") + 1] == "datasets/imagenet-1k"
 
 
 def test_analysis_helpers_summarize_and_correlate():

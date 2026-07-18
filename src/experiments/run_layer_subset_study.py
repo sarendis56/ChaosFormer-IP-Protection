@@ -13,10 +13,7 @@ import time
 
 DEIT = "facebook/deit-small-patch16-224"
 VIT = "google/vit-base-patch16-224"
-MODEL_PATHS = {
-    DEIT: Path("/data/peichun/huggingface/models/deit-small-patch16-224"),
-    VIT: Path("/data/peichun/huggingface/models/vit-base-patch16-224"),
-}
+DEFAULT_DATA_DIR = Path("data/imagenet-1k")
 FULL_SUBSETS = (
     "k6_top",
     "k6_cluster_1",
@@ -43,8 +40,17 @@ class Job:
     command: tuple[str, ...]
 
 
-def inference_jobs() -> list[Job]:
+def _model_path_args(model: str, model_paths: dict[str, Path]) -> tuple[str, ...]:
+    path = model_paths.get(model)
+    return () if path is None else ("--model-path", str(path))
+
+
+def inference_jobs(
+    model_paths: dict[str, Path] | None = None,
+    data_dir: Path = DEFAULT_DATA_DIR,
+) -> list[Job]:
     script = "src/experiments/layer_subset_mechanism_experiment.py"
+    model_paths = {} if model_paths is None else model_paths
     jobs = []
     for model in (DEIT, VIT):
         common = (
@@ -52,9 +58,9 @@ def inference_jobs() -> list[Job]:
             script,
             "--model",
             model,
-            "--model-path",
-            str(MODEL_PATHS[model]),
-        )
+            "--data-dir",
+            str(data_dir),
+        ) + _model_path_args(model, model_paths)
         jobs.append(Job(f"screen__{model.replace('/', '__')}", common + ("--action", "screen")))
         jobs.append(Job(f"enumerate__{model.replace('/', '__')}", common + ("--action", "enumerate")))
     return jobs
@@ -67,15 +73,18 @@ def retraining_job(
     phase: str,
     epochs: int,
     seed: int,
+    model_paths: dict[str, Path] | None = None,
+    data_dir: Path = DEFAULT_DATA_DIR,
 ) -> Job:
+    model_paths = {} if model_paths is None else model_paths
     name = f"{phase}__{model.replace('/', '__')}__{subset}__{attacker}__seed{seed}"
     command = (
         sys.executable,
         "src/experiments/layer_subset_retraining_experiment.py",
         "--model",
         model,
-        "--model-path",
-        str(MODEL_PATHS[model]),
+        "--data-dir",
+        str(data_dir),
         "--subset-name",
         subset,
         "--attacker",
@@ -86,32 +95,36 @@ def retraining_job(
         str(epochs),
         "--seed",
         str(seed),
-    )
+    ) + _model_path_args(model, model_paths)
     return Job(name, command)
 
 
-def jobs_for_phase(phase: str) -> list[Job]:
+def jobs_for_phase(
+    phase: str,
+    model_paths: dict[str, Path] | None = None,
+    data_dir: Path = DEFAULT_DATA_DIR,
+) -> list[Job]:
     if phase == "inference":
-        return inference_jobs()
+        return inference_jobs(model_paths, data_dir)
     if phase == "short":
         return [
-            retraining_job(DEIT, subset, "blind", "short", 5, 3101)
+            retraining_job(DEIT, subset, "blind", "short", 5, 3101, model_paths, data_dir)
             for subset in SHORT_SUBSETS
         ]
     if phase == "full":
         return [
-            retraining_job(DEIT, subset, "blind", "full", 20, seed)
+            retraining_job(DEIT, subset, "blind", "full", 20, seed, model_paths, data_dir)
             for subset in FULL_SUBSETS
             for seed in (4101, 4102, 4103)
         ]
     if phase == "oracle":
         return [
-            retraining_job(DEIT, subset, "oracle_reinit", "oracle", 5, 3101)
+            retraining_job(DEIT, subset, "oracle_reinit", "oracle", 5, 3101, model_paths, data_dir)
             for subset in FULL_SUBSETS
         ]
     if phase == "vit_confirm":
         return [
-            retraining_job(VIT, subset, "blind", "vit_confirm", 20, 6101)
+            retraining_job(VIT, subset, "blind", "vit_confirm", 20, 6101, model_paths, data_dir)
             for subset in FULL_SUBSETS
         ]
     raise ValueError(phase)
@@ -166,6 +179,9 @@ def parse_args():
         required=True,
     )
     parser.add_argument("--devices", nargs="+", default=["0", "1", "2", "3"])
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--deit-model-path", type=Path)
+    parser.add_argument("--vit-model-path", type=Path)
     parser.add_argument(
         "--log-dir",
         type=Path,
@@ -177,8 +193,16 @@ def parse_args():
 
 if __name__ == "__main__":
     arguments = parse_args()
+    local_model_paths = {
+        model: path
+        for model, path in (
+            (DEIT, arguments.deit_model_path),
+            (VIT, arguments.vit_model_path),
+        )
+        if path is not None
+    }
     run_queue(
-        jobs_for_phase(arguments.phase),
+        jobs_for_phase(arguments.phase, local_model_paths, arguments.data_dir),
         arguments.devices,
         arguments.log_dir / arguments.phase,
         arguments.dry_run,
