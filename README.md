@@ -99,7 +99,7 @@ uv run src/experiments/vit_encryption_experiment.py --mode basic --strategy rand
 # Basic mode with Last-K strategy (K=4)
 uv run src/experiments/vit_encryption_experiment.py --mode basic --strategy last-k --k 6 --device cuda:2
 
-# Advanced mode (All layers encrypted with modular addition)
+# Secure mode (all layers protected with ChaCha20 bit diffusion)
 uv run src/experiments/vit_encryption_experiment.py --mode advanced --device cuda:3
 
 # Avalanche-effect experiment (random-k with key perturbations)
@@ -260,6 +260,12 @@ Encrypted = P × Original × P^T
 ```
 
 **Applied to**: FFN weights (Intermediate and Output layers)
+
+### Secure Diffusion
+
+Secure mode applies a domain-separated RFC 8439 ChaCha20 keystream after the
+ACM or FFN permutation. The implementation generates the keystream on the fly
+and does not allocate a tensor-sized key.
 
 ### Inference Overhead Analysis
 

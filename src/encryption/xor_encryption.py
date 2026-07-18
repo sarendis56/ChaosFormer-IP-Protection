@@ -5,8 +5,9 @@ This module provides bit-level XOR encryption that transforms model weights
 into white noise, providing an additional layer of protection on top of
 Arnold Cat Map and permutation-based encryption.
 
-The XOR encryption uses deterministic key generation (PUF-derived style) where
-each layer and weight tensor gets a unique key based on its position and name.
+The XOR encryption uses domain-separated ChaCha20 key generation where each
+layer and weight tensor gets a unique key and nonce based on its position and
+name.  The deployment master secret is supplied by the PUF/KDF pipeline.
 
 Optimized for performance with:
 - In-place operations to reduce memory allocation
@@ -18,35 +19,16 @@ import torch
 import hashlib
 import triton
 import triton.language as tl
-import numba
-from numba import njit, prange
-import numpy as np
 from typing import Tuple, Optional, Union
 
-
-@njit(parallel=True)
-def _xor_prng_kernel(weight_int, seed):
-    """Numba JIT kernel for XOR with splitmix64 PRNG."""
-    w_flat = weight_int.ravel()
-    for i in prange(len(w_flat)):
-        x = np.uint64(seed + i)
-        x = (x + np.uint64(0x9E3779B97F4A7C15)) & np.uint64(0xFFFFFFFFFFFFFFFF)
-        z = x
-        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
-        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
-        z = z ^ (z >> np.uint64(31))
-        key = np.int32(z & np.uint64(0xFFFFFFFF))
-        w_flat[i] ^= key
+from .chacha20 import MasterSecret, chacha20_xor_, derive_chacha20_material
 
 
 def xor_encrypt_decrypt_numba(weight: torch.Tensor,
                               layer_idx: int,
                               weight_name: str,
-                              seed_base: int = 42):
-    """
-    Numba implementation of XOR encryption/decryption.
-    Modifies weight in-place.
-    """
+                              seed_base: MasterSecret = 42):
+    """Compatibility wrapper for in-place ChaCha20 diffusion on CPU or GPU."""
     if weight.is_cuda:
         # Use on-the-fly key generation to avoid shape mismatches
         return xor_encrypt_decrypt_triton(
@@ -56,28 +38,8 @@ def xor_encrypt_decrypt_numba(weight: torch.Tensor,
             seed_base=seed_base
         )
 
-    seed = get_stable_seed(layer_idx, weight_name, seed_base)
-    if weight.dtype == torch.int8:
-        weight_np = weight.numpy()
-        key = np.random.default_rng(seed).integers(-128, 128, size=weight_np.shape, dtype=np.int8)
-        weight_np ^= key
-        return weight
-    weight_int = weight.view(torch.int32)
-    weight_np = weight_int.numpy()
-    _xor_prng_kernel(weight_np, seed)
-    return weight
-
-
-@triton.jit
-def _hash_prng(seed, idx):
-    # Simple hash-based PRNG (SplitMix style) for on-the-fly key gen
-    # Input: seed and current index
-    # Output: pseudo-random int32
-    x = (seed + idx).to(tl.uint64)
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
-    x = (x ^ (x >> 27)) * 0x94d049bb133111eb
-    x = x ^ (x >> 31)
-    return x.to(tl.int32)
+    key, nonce = derive_chacha20_material(layer_idx, weight_name, seed_base)
+    return chacha20_xor_(weight, key, nonce)
 
 
 @triton.jit
@@ -97,48 +59,15 @@ def xor_kernel(
     tl.store(x_ptr + offsets, output, mask=mask)
 
 
-@triton.jit
-def xor_onthefly_kernel(
-    x_ptr,
-    n_elements,
-    seed,
-    BLOCK_SIZE: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    
-    x = tl.load(x_ptr + offsets, mask=mask)
-    
-    # Generate XOR key on-the-fly
-    key = _hash_prng(seed, offsets)
-    
-    # XOR with appropriate bit-width
-    if x.dtype == tl.float32:
-        x_int = x.to(tl.int32, bitcast=True)
-        output_int = x_int ^ key
-        output = output_int.to(tl.float32, bitcast=True)
-    elif x.dtype == tl.float16:
-        x_int = x.to(tl.int16, bitcast=True)
-        key_16 = key.to(tl.int16)
-        output_int = x_int ^ key_16
-        output = output_int.to(tl.float16, bitcast=True)
-    else:
-        # For integer types like int8, XOR with truncated key
-        output = x ^ key.to(x.dtype)
-    
-    tl.store(x_ptr + offsets, output, mask=mask)
-
-
 def xor_encrypt_decrypt_triton(weight: torch.Tensor, xor_key: Optional[torch.Tensor] = None,
                                layer_idx: Optional[int] = None, weight_name: Optional[str] = None,
-                               seed_base: int = 42):
+                               seed_base: MasterSecret = 42):
     """
     Triton implementation of XOR encryption/decryption.
     Modifies weight in-place.
     
-    Can use either a pre-allocated xor_key or generate it on-the-fly if xor_key is None.
+    Can use either a pre-allocated xor_key or generate a ChaCha20 keystream
+    on-the-fly if xor_key is None.
     """
     if not weight.is_cuda:
         # Pre-allocated key case
@@ -148,31 +77,22 @@ def xor_encrypt_decrypt_triton(weight: torch.Tensor, xor_key: Optional[torch.Ten
         return xor_encrypt_decrypt_numba(weight, layer_idx, weight_name, seed_base)
     
     n_elements = weight.numel()
-    
-    # Use appropriate dtype for viewing
-    if weight.dtype == torch.int8:
-        weight_view = weight.view(torch.int8)
-    elif weight.dtype == torch.float16:
-        weight_view = weight.view(torch.int16)
-    else:
-        weight_view = weight.view(torch.int32)
-    
-    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    
     if xor_key is not None and weight.dtype == torch.float32 and xor_key.numel() == n_elements:
+        weight_view = weight.view(torch.int32)
         xor_key_view = xor_key.view(weight_view.dtype)
+        def grid(meta):
+            return (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
         xor_kernel[grid](weight_view, xor_key_view, n_elements, BLOCK_SIZE=1024)
     else:
-        # On-the-fly key generation
         if layer_idx is None or weight_name is None:
             raise ValueError("Either xor_key must be provided, or both layer_idx and weight_name")
-        seed = get_stable_seed(layer_idx, weight_name, seed_base)
-        xor_onthefly_kernel[grid](weight_view, n_elements, seed, BLOCK_SIZE=1024)
+        key, nonce = derive_chacha20_material(layer_idx, weight_name, seed_base)
+        chacha20_xor_(weight, key, nonce)
         
     return weight
 
 
-def get_stable_seed(layer_idx: int, weight_name: str, seed_base: int) -> int:
+def get_stable_seed(layer_idx: int, weight_name: str, seed_base: MasterSecret) -> int:
     """
     Creates a run-independent deterministic seed using SHA256.
     
@@ -195,7 +115,7 @@ def generate_xor_key(weight_shape: Tuple[int, ...],
                      layer_idx: int, 
                      weight_name: str,
                      device: Union[str, torch.device] = 'cuda',
-                     seed_base: int = 42) -> torch.Tensor:
+                     seed_base: MasterSecret = 42) -> torch.Tensor:
     """
     Generate deterministic XOR key for a weight tensor (PUF-derived style).
     
@@ -224,15 +144,10 @@ def generate_xor_key(weight_shape: Tuple[int, ...],
     else:
         device_obj = device
     
-    # Create a local generator (avoids global state synchronization)
-    gen = torch.Generator(device=device_obj)
-    gen.manual_seed(get_stable_seed(layer_idx, weight_name, seed_base))
-    
-    # Generate random integers for XOR (int32 can hold values from -2**31 to 2**31-1)
-    # We use the full range by generating signed integers, which covers all 32 bits
+    key_bytes, nonce = derive_chacha20_material(layer_idx, weight_name, seed_base)
     key = torch.empty(weight_shape, device=device_obj, dtype=torch.int32)
-    # random_() fills with random values covering the full int32 range
-    key.random_(-2**31, 2**31, generator=gen)
+    key.zero_()
+    chacha20_xor_(key, key_bytes, nonce)
     
     return key
 
@@ -241,7 +156,7 @@ def xor_encrypt_decrypt(weight: torch.Tensor,
                        xor_key: Optional[torch.Tensor] = None,
                        layer_idx: Optional[int] = None,
                        weight_name: Optional[str] = None,
-                       seed_base: int = 42,
+                       seed_base: MasterSecret = 42,
                        in_place: bool = False) -> torch.Tensor:
     """
     Apply XOR encryption/decryption to a float weight tensor.

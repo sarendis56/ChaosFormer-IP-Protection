@@ -11,10 +11,8 @@ import torch
 import numpy as np
 import triton
 import triton.language as tl
-import numba
 from numba import njit, prange
 from typing import List, Union, Tuple, Optional, Dict
-from functools import lru_cache
 
 
 @njit(parallel=True)
@@ -31,14 +29,19 @@ def _arnold_numba_kernel(input_matrix, output_matrix, h, w, a_final, b_final, c_
             output_matrix[new_i, new_j] = input_matrix[i, j]
 
 
-def arnold_numba(matrix: torch.Tensor, key: List[int]) -> torch.Tensor:
+def arnold_numba(
+    matrix: torch.Tensor,
+    key: List[int],
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """Numba-optimized CPU implementation of Arnold Cat Map."""
     N, a, b, c, d = key
     h, w = matrix.shape[:2]
     
-    # Compute the final transformation matrix using binary exponentiation
+    # Compute the final transformation matrix with the selected schedule.
     transformation_matrix = np.array([[a, b], [c, d]], dtype=np.int64)
-    final_matrix = _matrix_power_mod(transformation_matrix, N, w)
+    power_fn = _matrix_power_mod_fixed_schedule if fixed_schedule else _matrix_power_mod
+    final_matrix = power_fn(transformation_matrix, N, w)
     
     a_f, b_f = int(final_matrix[0, 0]), int(final_matrix[0, 1])
     c_f, d_f = int(final_matrix[1, 0]), int(final_matrix[1, 1])
@@ -52,7 +55,11 @@ def arnold_numba(matrix: torch.Tensor, key: List[int]) -> torch.Tensor:
     return torch.from_numpy(output_np).to(matrix.device)
 
 
-def iarnold_numba(matrix: torch.Tensor, key: List[int]) -> torch.Tensor:
+def iarnold_numba(
+    matrix: torch.Tensor,
+    key: List[int],
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """Numba-optimized CPU implementation of inverse Arnold Cat Map."""
     N, a, b, c, d = key
     h, w = matrix.shape[:2]
@@ -61,64 +68,7 @@ def iarnold_numba(matrix: torch.Tensor, key: List[int]) -> torch.Tensor:
     inv_key = [N, int(inv_key_matrix[0, 0]), int(inv_key_matrix[0, 1]), 
                int(inv_key_matrix[1, 0]), int(inv_key_matrix[1, 1])]
     
-    return arnold_numba(matrix, inv_key)
-
-
-@triton.jit
-def arnold_kernel(
-    input_ptr,
-    output_ptr,
-    h, w,
-    a_f, b_f, c_f, d_f,
-    BLOCK_SIZE_H: tl.constexpr,
-    BLOCK_SIZE_W: tl.constexpr,
-):
-    # This kernel uses the forward transform mapping:
-    # x_f = (a_f * x_s + b_f * y_s) % w
-    # y_f = (c_f * x_s + d_f * y_s) % h
-    
-    pid_h = tl.program_id(0)
-    pid_w = tl.program_id(1)
-    
-    rm = pid_h * BLOCK_SIZE_H + tl.arange(0, BLOCK_SIZE_H)
-    rn = pid_w * BLOCK_SIZE_W + tl.arange(0, BLOCK_SIZE_W)
-    
-    mask = (rm < h)[:, None] & (rn < w)[None, :]
-    
-    # Input coordinates (x_s, y_s)
-    # rm is y_s (row), rn is x_s (col) in 'ij' indexing
-    x_s = rn[None, :]
-    y_s = rm[:, None]
-    
-    # Output coordinates (x_f, y_f)
-    x_f = (a_f * x_s + b_f * y_s) % w
-    y_f = (c_f * x_s + d_f * y_s) % h
-    
-    # Load from input (y_s, x_s)
-    input_offsets = rm[:, None] * w + rn[None, :]
-    val = tl.load(input_ptr + input_offsets, mask=mask)
-    
-    # Store to output (y_f, x_f)
-    # Note: tl.store with non-contiguous offsets can be slow or restricted.
-    # In Triton, we usually prefer to have the output offsets be contiguous.
-    # To make output offsets contiguous, we would need the inverse transform.
-    # Let's use the inverse transform to find which input maps to this output.
-    
-    # Inverse transform parameters (pre-calculated in python)
-    # x_s = (a_inv * x_f + b_inv * y_f) % w
-    # y_s = (c_inv * x_f + d_inv * y_f) % h
-    
-@triton.jit
-def _hash_prng(seed, idx):
-    # Simple hash-based PRNG (SplitMix style) for on-the-fly key gen
-    # Input: seed and current index
-    # Output: pseudo-random int32
-    # Note: Using uint64 for intermediate calculations to match bitwise behavior
-    x = (seed + idx).to(tl.uint64)
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
-    x = (x ^ (x >> 27)) * 0x94d049bb133111eb
-    x = x ^ (x >> 31)
-    return x.to(tl.int32)
+    return arnold_numba(matrix, inv_key, fixed_schedule=fixed_schedule)
 
 
 @triton.jit
@@ -127,8 +77,6 @@ def arnold_gather_kernel(
     output_ptr,
     h, w,
     a_inv, b_inv, c_inv, d_inv,
-    xor_seed,
-    use_xor: tl.constexpr,
     BLOCK_SIZE_H: tl.constexpr,
     BLOCK_SIZE_W: tl.constexpr,
 ):
@@ -153,57 +101,46 @@ def arnold_gather_kernel(
     input_offsets = y_s * w + x_s
     val = tl.load(input_ptr + input_offsets, mask=mask)
     
-    if use_xor:
-        # Generate XOR key on-the-fly using the source index
-        # This ensures the key is consistent for the same weight value
-        key = _hash_prng(xor_seed, input_offsets)
-        
-        # Handle different bit-widths for XOR
-        if val.dtype == tl.float32:
-            val_int = val.to(tl.int32, bitcast=True)
-            enc_int = val_int ^ key
-            val = enc_int.to(tl.float32, bitcast=True)
-        elif val.dtype == tl.float16:
-            val_int = val.to(tl.int16, bitcast=True)
-            key_16 = key.to(tl.int16)
-            enc_int = val_int ^ key_16
-            val = enc_int.to(tl.float16, bitcast=True)
-        else:
-            # Assume integer type (e.g. int8)
-            val = val ^ key.to(val.dtype)
-    
     # Store to output at (y_f, x_f)
     output_offsets = rf[:, None] * w + cf[None, :]
     tl.store(output_ptr + output_offsets, val, mask=mask)
 
 
-def arnold_triton(matrix: torch.Tensor, key: List[int], xor_seed: Optional[int] = None) -> torch.Tensor:
+def arnold_triton(
+    matrix: torch.Tensor,
+    key: List[int],
+    xor_seed: Optional[Union[int, str, bytes, bytearray]] = None,
+    xor_context: str = "arnold-attention",
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """
-    Triton implementation of Arnold Cat Map, optionally with fused XOR encryption.
+    Triton implementation of Arnold Cat Map with optional ChaCha20 diffusion.
     
     Args:
         matrix: Input matrix (CUDA tensor)
         key: Arnold key [N, a, b, c, d]
-        xor_seed: Seed for on-the-fly XOR encryption. If None, XOR is skipped.
+        xor_seed: Master secret for ChaCha20 diffusion. If None, diffusion is skipped.
+        xor_context: Domain-separation label for the protected tensor.
+        fixed_schedule: Use the six-round, key-independent exponentiation schedule
+            for supported iteration counts in ``[0, 63]``.
     """
     if not matrix.is_cuda:
         # Fallback to optimized version for CPU
-        result = arnold_optimized(matrix, key)
+        result = arnold_optimized(matrix, key, fixed_schedule=fixed_schedule)
         if xor_seed is not None:
-            # We don't have a fused CPU version yet, but we can call xor_encrypt_decrypt_numba
-            from .xor_encryption import xor_encrypt_decrypt_numba
-            # Note: layer_idx and weight_name are not directly available here, 
-            # so we'd need to adjust if we really wanted fused CPU.
-            # For now, let's just use the existing CPU XOR if needed.
-            pass
+            from .xor_encryption import xor_encrypt_decrypt_triton
+            xor_encrypt_decrypt_triton(
+                result, layer_idx=0, weight_name=xor_context, seed_base=xor_seed
+            )
         return result
         
     N, a, b, c, d = key
     h, w = matrix.shape[:2]
     
-    # Compute M^N mod w
+    # Compute M^N mod w with the selected schedule.
     transformation_matrix = np.array([[a, b], [c, d]], dtype=np.int64)
-    final_matrix = _matrix_power_mod(transformation_matrix, N, w)
+    power_fn = _matrix_power_mod_fixed_schedule if fixed_schedule else _matrix_power_mod
+    final_matrix = power_fn(transformation_matrix, N, w)
     
     # Compute inverse of final_matrix mod w
     # det is 1, so inverse of [[A, B], [C, D]] is [[D, -B], [-C, A]]
@@ -217,39 +154,38 @@ def arnold_triton(matrix: torch.Tensor, key: List[int], xor_seed: Optional[int] 
     
     output = torch.empty_like(matrix)
     
-    grid = lambda meta: (
-        triton.cdiv(h, meta['BLOCK_SIZE_H']),
-        triton.cdiv(w, meta['BLOCK_SIZE_W'])
-    )
-    
-    use_xor = xor_seed is not None
-    seed_val = xor_seed if use_xor else 0
+    def grid(meta):
+        return (
+            triton.cdiv(h, meta['BLOCK_SIZE_H']),
+            triton.cdiv(w, meta['BLOCK_SIZE_W']),
+        )
     
     arnold_gather_kernel[grid](
         matrix, output,
         h, w,
         a_inv, b_inv, c_inv, d_inv,
-        xor_seed=seed_val,
-        use_xor=use_xor,
         BLOCK_SIZE_H=16, BLOCK_SIZE_W=16
     )
+
+    if xor_seed is not None:
+        from .xor_encryption import xor_encrypt_decrypt_triton
+        xor_encrypt_decrypt_triton(
+            output, layer_idx=0, weight_name=xor_context, seed_base=xor_seed
+        )
     
     return output
 
 
-def iarnold_triton(matrix: torch.Tensor, key: List[int], xor_seed: Optional[int] = None) -> torch.Tensor:
+def iarnold_triton(
+    matrix: torch.Tensor,
+    key: List[int],
+    xor_seed: Optional[Union[int, str, bytes, bytearray]] = None,
+    xor_context: str = "arnold-attention",
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """
-    Triton implementation of inverse Arnold Cat Map, optionally with fused XOR decryption.
+    Inverse Arnold Cat Map with optional pre-permutation ChaCha20 removal.
     """
-    if not matrix.is_cuda:
-        # Fallback for CPU
-        if xor_seed is not None:
-            # XOR is its own inverse, but we apply it BEFORE ACM for decryption
-            # since it was applied AFTER ACM for encryption?
-            # Wait, let's check the order in DualEncryption.
-            pass
-        return iarnold_optimized(matrix, key)
-        
     N, a, b, c, d = key
     h, w = matrix.shape[:2]
     
@@ -258,14 +194,24 @@ def iarnold_triton(matrix: torch.Tensor, key: List[int], xor_seed: Optional[int]
     inv_key = [N, int(inv_key_matrix[0, 0]), int(inv_key_matrix[0, 1]), 
                int(inv_key_matrix[1, 0]), int(inv_key_matrix[1, 1])]
     
-    # Note: For decryption, if we used fused XOR during encryption (ACM then XOR),
-    # we MUST XOR first, then apply Inverse ACM.
-    # Our fused kernel does: Load -> XOR -> Store at ACM-transformed position.
-    # If we want a fused decryption kernel, it should be: 
-    # Load -> XOR -> Store at Inverse-ACM-transformed position.
-    # This works because (ACM(W) ^ K) ^ K = ACM(W), and then InverseACM(ACM(W)) = W.
-    
-    return arnold_triton(matrix, inv_key, xor_seed=xor_seed)
+    input_matrix = matrix
+    if xor_seed is not None:
+        from .xor_encryption import xor_encrypt_decrypt_triton
+        input_matrix = matrix.clone()
+        xor_encrypt_decrypt_triton(
+            input_matrix,
+            layer_idx=0,
+            weight_name=xor_context,
+            seed_base=xor_seed,
+        )
+
+    return arnold_triton(
+        input_matrix,
+        inv_key,
+        xor_seed=None,
+        xor_context=xor_context,
+        fixed_schedule=fixed_schedule,
+    )
 
 
 def arnold(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:
@@ -312,13 +258,10 @@ def arnold(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Ten
     # Get coordinate grids (using cache if available)
     x_orig_grid, y_orig_grid = _get_coordinate_grids(h, w, device)
     
-    # Flatten coordinates for efficient processing
-    # Note: With indexing='ij', x_orig_grid represents rows, y_orig_grid represents columns
-    # This is because meshgrid with 'ij' returns (row_grid, col_grid) where:
-    # - First grid (x_orig_grid): varies along columns, contains row indices
-    # - Second grid (y_orig_grid): varies along rows, contains column indices
-    x_coords_to_transform = x_orig_grid.flatten()  # Row indices (0 to h-1)
-    y_coords_to_transform = y_orig_grid.flatten()  # Column indices (0 to w-1)
+    # ``_get_coordinate_grids`` returns Cartesian coordinates: x is the column
+    # index and y is the row index.
+    x_coords_to_transform = x_orig_grid.flatten()
+    y_coords_to_transform = y_orig_grid.flatten()
 
     # Transform coordinates N times to find final destinations (no matrix operations yet)
     # Arnold transform: [x'] = [a b] [x] mod w, where x is row, y is col
@@ -426,7 +369,46 @@ def _matrix_power_mod(matrix: np.ndarray, power: int, mod: int) -> np.ndarray:
     return result
 
 
-def arnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:
+def _matrix_power_mod_fixed_schedule(
+    matrix: np.ndarray,
+    power: int,
+    mod: int,
+    schedule_bits: int = 6,
+) -> np.ndarray:
+    """Compute ``matrix**power mod mod`` with a key-independent operation schedule.
+
+    Every round performs both a candidate multiply and a square, then selects the
+    candidate with arithmetic masking. The default six rounds cover ChaosFormer's
+    supported ACM iteration range of 3--34 and always execute 12 matrix products.
+    This fixes the algorithmic schedule; it is not by itself a machine-level
+    constant-time guarantee for the Python/NumPy runtime.
+    """
+    if schedule_bits < 1:
+        raise ValueError("schedule_bits must be positive")
+    if power < 0 or power >= 1 << schedule_bits:
+        raise ValueError(
+            f"power must be in [0, {(1 << schedule_bits) - 1}] for "
+            f"a {schedule_bits}-bit fixed schedule"
+        )
+
+    result = np.array([[1, 0], [0, 1]], dtype=np.int64)
+    base = np.asarray(matrix, dtype=np.int64) % mod
+
+    for bit_index in range(schedule_bits):
+        candidate = (result @ base) % mod
+        squared = (base @ base) % mod
+        bit = (power >> bit_index) & 1
+        result = (bit * candidate + (1 - bit) * result) % mod
+        base = squared
+
+    return result
+
+
+def arnold_optimized(
+    matrix: Union[torch.Tensor, np.ndarray],
+    key: List[int],
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """
     Apply Arnold Cat Map transformation using matrix exponentiation optimization.
     
@@ -472,10 +454,10 @@ def arnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) ->
 
     device = matrix.device
 
-    # Compute the final transformation matrix using binary exponentiation
-    # This is O(log N) instead of O(N)
+    # Compute the final transformation matrix with the selected schedule.
     transformation_matrix = np.array([[a, b], [c, d]], dtype=np.int64)
-    final_matrix = _matrix_power_mod(transformation_matrix, N, w)
+    power_fn = _matrix_power_mod_fixed_schedule if fixed_schedule else _matrix_power_mod
+    final_matrix = power_fn(transformation_matrix, N, w)
     
     # Convert to torch tensor on the same device
     final_matrix_torch = torch.tensor(final_matrix, device=device, dtype=torch.long)
@@ -494,16 +476,14 @@ def arnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) ->
     y_coords_to_transform = y_orig_grid.flatten()  # Column indices (0 to w-1)
 
     # Apply the final transformation matrix ONCE (no loop needed!)
-    # Arnold transform: [x'] = [a b] [x] mod w, where x is row, y is col
+    # Arnold transform: [x'] = [a b] [x] mod w
     #                   [y']   [c d] [y] mod h
-    final_dest_x = (a_final * x_coords_to_transform + b_final * y_coords_to_transform) % w  # Final row
-    final_dest_y = (c_final * x_coords_to_transform + d_final * y_coords_to_transform) % h  # Final column
+    final_dest_x = (a_final * x_coords_to_transform + b_final * y_coords_to_transform) % w
+    final_dest_y = (c_final * x_coords_to_transform + d_final * y_coords_to_transform) % h
 
     # Calculate final destination indices for scatter operation
-    # Row-major indexing: row * width + col
-    # With indexing='ij', x_orig_grid represents rows, y_orig_grid represents columns
-    # So final_dest_x is row, final_dest_y is col
-    final_dest_flat_indices = (final_dest_x * w + final_dest_y).long()
+    # Row-major indexing is y * width + x.
+    final_dest_flat_indices = (final_dest_y * w + final_dest_x).long()
 
     # Reshape original matrix and prepare output buffer
     original_matrix_flat = matrix.reshape(h * w, -1)
@@ -518,7 +498,11 @@ def arnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) ->
     return result.contiguous()
 
 
-def iarnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:
+def iarnold_optimized(
+    matrix: Union[torch.Tensor, np.ndarray],
+    key: List[int],
+    fixed_schedule: bool = False,
+) -> torch.Tensor:
     """
     Apply inverse Arnold Cat Map transformation using optimized matrix exponentiation.
     
@@ -555,7 +539,7 @@ def iarnold_optimized(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -
                inv_key_matrix[1, 0],
                inv_key_matrix[1, 1]]
     
-    return arnold_optimized(matrix, inv_key)
+    return arnold_optimized(matrix, inv_key, fixed_schedule=fixed_schedule)
 
 
 def iarnold(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:

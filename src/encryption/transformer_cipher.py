@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
@@ -11,7 +10,8 @@ import torch
 from torch import nn
 
 from .arnold_transform import arnold_triton, iarnold_triton
-from .xor_encryption import get_stable_seed, xor_encrypt_decrypt_triton
+from .chacha20 import MasterSecret, chacha20_xor_, derive_chacha20_material
+from .xor_encryption import get_stable_seed
 
 
 @dataclass
@@ -21,6 +21,8 @@ class WeightSpec:
     operation: str
     permutation: torch.Tensor | None = None
     inverse_permutation: torch.Tensor | None = None
+    diffusion_key: bytes | None = None
+    diffusion_nonce: bytes | None = None
 
 
 @dataclass
@@ -98,7 +100,7 @@ class TransformerCipher:
         *,
         secure: bool,
         selected_layers: list[int] | None = None,
-        seed: int = 20260710,
+        seed: MasterSecret = 20260710,
         arnold_key: tuple[int, int, int, int, int] = (3, 1, 1, 1, 2),
     ) -> None:
         layers, family = transformer_layers(model)
@@ -127,6 +129,7 @@ class TransformerCipher:
                     raise ValueError(f"{path} is not square: {tuple(parameter.shape)}")
 
                 permutation = inverse = None
+                diffusion_key = diffusion_nonce = None
                 if operation != "square":
                     hidden_dimension = (
                         parameter.shape[1]
@@ -140,6 +143,10 @@ class TransformerCipher:
                         hidden_dimension, generator=generator
                     ).to(parameter.device)
                     inverse = torch.argsort(permutation)
+                if secure:
+                    diffusion_key, diffusion_nonce = derive_chacha20_material(
+                        index, path, seed
+                    )
                 specs.append(
                     WeightSpec(
                         name=path,
@@ -147,6 +154,8 @@ class TransformerCipher:
                         operation=operation,
                         permutation=permutation,
                         inverse_permutation=inverse,
+                        diffusion_key=diffusion_key,
+                        diffusion_nonce=diffusion_nonce,
                     )
                 )
             self.layer_specs.append(LayerSpec(index, module, specs))
@@ -165,11 +174,11 @@ class TransformerCipher:
             torch.cuda.synchronize(parameter.device)
 
     def _diffuse(self, layer_index: int, spec: WeightSpec) -> None:
-        xor_encrypt_decrypt_triton(
-            spec.parameter.data,
-            layer_idx=layer_index,
-            weight_name=spec.name,
-            seed_base=self.seed,
+        del layer_index  # Material is pre-derived for every selected tensor.
+        if spec.diffusion_key is None or spec.diffusion_nonce is None:
+            raise RuntimeError(f"missing diffusion material for {spec.name}")
+        chacha20_xor_(
+            spec.parameter.data, spec.diffusion_key, spec.diffusion_nonce
         )
 
     def _permute(self, spec: WeightSpec) -> None:

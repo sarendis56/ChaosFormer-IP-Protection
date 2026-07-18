@@ -4,7 +4,6 @@ encryption for Feed-Forward Network (FFN) weights.
 """
 
 import torch
-import numpy as np
 import hmac
 import hashlib
 from typing import Dict, List, Optional, Tuple, NamedTuple
@@ -12,7 +11,7 @@ from dataclasses import dataclass
 import logging
 
 from .arnold_transform import (
-    arnold, iarnold, get_standard_key,
+    get_standard_key,
     arnold_triton, iarnold_triton, arnold_optimized, iarnold_optimized,
     generate_arnold_key
 )
@@ -22,13 +21,9 @@ from .permutation import (
     decrypt_ffn_weight_row_permutation
 )
 from .xor_encryption import (
-    generate_xor_key,
-    xor_encrypt_decrypt,
     xor_encrypt_decrypt_numba,
     xor_encrypt_decrypt_triton,
     get_stable_seed,
-    encrypt_weights_xor,
-    decrypt_weights_xor
 )
 
 
@@ -45,7 +40,7 @@ class EncryptionConfig:
     use_xor: bool = False  # Enable XOR encryption as third layer
     xor_seed_base: int = 42  # Base seed for XOR key generation
     mode: str = 'basic'  # 'basic' or 'advanced'
-    l_modular: int = 256  # Modular addition value for advanced mode
+    l_modular: int = 256  # Deprecated compatibility field; diffusion is bitwise.
 
 
 class LayerEncryptionResult(NamedTuple):
@@ -58,13 +53,13 @@ class LayerEncryptionResult(NamedTuple):
 
 class DualEncryption:
     """
-    Dual/Triple encryption system for Vision Transformer layers.
+    Permutation and cryptographic-diffusion system for Vision Transformer layers.
     
     This class provides a unified interface for encrypting and decrypting
     transformer layers using:
     - Arnold Cat Map (ACM) for attention weights
     - Permutation-based encryption for FFN weights
-    - Optional XOR encryption for all weights (when use_xor=True)
+    - ChaCha20 bit diffusion for secure mode or when use_xor=True
     
     Attributes:
         config: Encryption configuration
@@ -100,7 +95,7 @@ class DualEncryption:
             use_xor: Enable XOR encryption as third layer (default: False)
             xor_seed_base: Base seed for XOR key generation (default: 42)
             mode: Encryption mode ('basic' or 'advanced')
-            l_modular: Modular value for advanced mode addition
+            l_modular: Deprecated compatibility parameter
         """
         # Derive parameters from master_secret if provided (simulating PUF derivation)
         if master_secret is not None:
@@ -133,7 +128,14 @@ class DualEncryption:
             device=device,
             dtype=dtype,
             use_xor=use_xor,
-            xor_seed_base=xor_seed_base
+            xor_seed_base=xor_seed_base,
+            mode=mode,
+            l_modular=l_modular,
+        )
+        # Preserve the full PUF-derived secret for ChaCha20.  The 32-bit
+        # xor_seed_base remains only as a backward-compatible simulation input.
+        self.diffusion_secret = (
+            master_secret if master_secret is not None else xor_seed_base
         )
         
         # Generate permutation matrices
@@ -177,7 +179,7 @@ class DualEncryption:
             use_xor: Enable XOR encryption as third layer
             xor_seed_base: Base seed for XOR key generation
             mode: Encryption mode ('basic' or 'advanced')
-            l_modular: Modular value for advanced mode addition
+            l_modular: Deprecated compatibility parameter
 
         Returns:
             DualEncryption: Configured encryption system
@@ -201,19 +203,21 @@ class DualEncryption:
             device=device,
             dtype=dtype,
             use_xor=use_xor,
-            xor_seed_base=xor_seed_base
+            xor_seed_base=xor_seed_base,
+            mode=mode,
+            l_modular=l_modular,
         )
 
     def encrypt_attention_weights(self,
                                 attention_weights: Dict[str, torch.Tensor],
                                 layer_idx: int = 0) -> Dict[str, torch.Tensor]:
         """
-        Encrypt attention weights using Arnold Cat Map, optionally with XOR or modular addition.
+        Encrypt attention weights using Arnold Cat Map and optional ChaCha20 diffusion.
         
         Args:
             attention_weights: Dictionary containing attention weight tensors
                              (query, key, value, output)
-            layer_idx: Layer index for XOR/modular key generation
+            layer_idx: Layer index for domain-separated diffusion material
         
         Returns:
             Dict[str, torch.Tensor]: Encrypted attention weights
@@ -223,50 +227,32 @@ class DualEncryption:
         for name, weight in attention_weights.items():
             # Apply permutation first (ACM for square matrices)
             if weight.shape[0] == weight.shape[1]:
-                # Optimized GPU path
-                if weight.is_cuda:
-                    # For advanced mode, we can use XOR as a simulation of modular addition 
-                    # if we don't have a dedicated modular addition kernel. 
-                    # However, the user specifically asked for (Pi(W) + M) mod L.
-                    # Let's implement modular addition.
-                    
-                    if self.config.mode == 'advanced':
-                        # Advanced mode: Permutation + Modular Addition
-                        permuted = arnold_triton(weight, self.config.arnold_key)
-                        # Simulate PRF keystream M
-                        xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        torch.manual_seed(xor_seed)
-                        M = torch.randn_like(permuted) * 0.1 # Scaled noise
-                        # W_enc = (Pi(W) + M) mod L is for integer weights usually.
-                        # For float weights, we can simulate it by adding noise.
-                        # If the user means 8-bit quantization then modular addition makes sense.
-                        # For now, let's follow the formula literally or simulate with addition.
-                        encrypted_attention[name] = (permuted + M) % self.config.l_modular if self.config.l_modular != 0 else permuted + M
-                    else:
-                        # Basic mode: ACM (+ optional XOR)
-                        xor_seed = None
-                        if self.config.use_xor:
-                            xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        
-                        encrypted_attention[name] = arnold_triton(
-                            weight, 
-                            self.config.arnold_key, 
-                            xor_seed=xor_seed
-                        )
+                if self.config.mode == 'advanced':
+                    encrypted_attention[name] = arnold_triton(
+                        weight,
+                        self.config.arnold_key,
+                        xor_seed=self.diffusion_secret,
+                        xor_context=f"attention:{layer_idx}:{name}",
+                    )
+                elif weight.is_cuda:
+                    xor_seed = None
+                    if self.config.use_xor:
+                        xor_seed = self.diffusion_secret
+                    encrypted_attention[name] = arnold_triton(
+                        weight,
+                        self.config.arnold_key,
+                        xor_seed=xor_seed,
+                        xor_context=f"attention:{layer_idx}:{name}",
+                    )
                 else:
                     # CPU fallback
-                    if self.config.mode == 'advanced':
-                        permuted = arnold_optimized(weight, self.config.arnold_key)
-                        xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        torch.manual_seed(xor_seed)
-                        M = torch.randn_like(permuted) * 0.1
-                        encrypted_attention[name] = (permuted + M) % self.config.l_modular if self.config.l_modular != 0 else permuted + M
-                    else:
-                        if self.config.use_xor:
-                            weight = xor_encrypt_decrypt_numba(
-                                weight, layer_idx=layer_idx, weight_name=name, seed_base=self.config.xor_seed_base
-                            )
-                        encrypted_attention[name] = arnold_optimized(weight, self.config.arnold_key)
+                    if self.config.use_xor:
+                        weight = weight.clone()
+                        xor_encrypt_decrypt_numba(
+                            weight, layer_idx=layer_idx, weight_name=name,
+                            seed_base=self.diffusion_secret
+                        )
+                    encrypted_attention[name] = arnold_optimized(weight, self.config.arnold_key)
             else:
                 # Non-square matrices (if any in attention, though usually they are square)
                 # Apply Knuth Shuffle (simulated by random permutation)
@@ -283,10 +269,6 @@ class DualEncryption:
         perm = torch.randperm(weight.shape[0], device=weight.device)
         permuted = weight[perm]
         
-        if self.config.mode == 'advanced':
-            M = torch.randn_like(permuted) * 0.1
-            return (permuted + M) % self.config.l_modular if self.config.l_modular != 0 else permuted + M
-        
         return permuted
 
     def encrypt_ffn_weights(self, 
@@ -294,7 +276,7 @@ class DualEncryption:
                           permutation_matrix_idx: int = 0,
                           layer_idx: int = 0) -> Dict[str, torch.Tensor]:
         """
-        Encrypt FFN weights using row permutation (Knuth Shuffle), optionally with modular addition.
+        Encrypt FFN weights using row permutation and optional ChaCha20 diffusion.
         
         Args:
             ffn_weights: Dictionary containing FFN weight tensors
@@ -319,7 +301,7 @@ class DualEncryption:
                     permuted = encrypt_ffn_weight_row_permutation(
                         weight.transpose(0, 1),
                         perm_matrix.to(dtype=weight.dtype)
-                    ).transpose(0, 1)
+                    ).transpose(0, 1).contiguous()
                 else:
                     # output_weight (intermediate_size x hidden_size)
                     # Row permutation directly
@@ -332,10 +314,11 @@ class DualEncryption:
                 permuted = self._knuth_shuffle(weight, layer_idx, name)
             
             if self.config.mode == 'advanced':
-                xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                torch.manual_seed(xor_seed)
-                M = torch.randn_like(permuted) * 0.1
-                encrypted_ffn[name] = (permuted + M) % self.config.l_modular if self.config.l_modular != 0 else permuted + M
+                xor_encrypt_decrypt_triton(
+                    permuted, layer_idx=layer_idx, weight_name=name,
+                    seed_base=self.diffusion_secret
+                )
+                encrypted_ffn[name] = permuted
             else:
                 # Basic mode XOR if enabled
                 if self.config.use_xor:
@@ -343,7 +326,7 @@ class DualEncryption:
                         permuted, 
                         layer_idx=layer_idx, 
                         weight_name=name,
-                        seed_base=self.config.xor_seed_base
+                        seed_base=self.diffusion_secret
                     )
                 encrypted_ffn[name] = permuted
                 
@@ -353,11 +336,11 @@ class DualEncryption:
                                 encrypted_attention: Dict[str, torch.Tensor],
                                 layer_idx: int = 0) -> Dict[str, torch.Tensor]:
         """
-        Decrypt attention weights using inverse Arnold Cat Map, optionally with XOR or modular subtraction.
+        Decrypt attention weights using ChaCha20 removal and inverse Arnold Cat Map.
         
         Args:
             encrypted_attention: Dictionary containing encrypted attention weights
-            layer_idx: Layer index for XOR/modular key generation
+            layer_idx: Layer index for domain-separated diffusion material
         
         Returns:
             Dict[str, torch.Tensor]: Decrypted attention weights
@@ -366,42 +349,32 @@ class DualEncryption:
         
         for name, weight in encrypted_attention.items():
             if weight.shape[0] == weight.shape[1]:
-                # Optimized GPU path
-                if weight.is_cuda:
-                    if self.config.mode == 'advanced':
-                        # Advanced mode: Modular Subtraction + Inverse Permutation
-                        xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        torch.manual_seed(xor_seed)
-                        M = torch.randn_like(weight) * 0.1
-                        # W_dec = (W_enc - M) mod L
-                        subtracted = (weight - M) % self.config.l_modular if self.config.l_modular != 0 else weight - M
-                        decrypted_attention[name] = iarnold_triton(subtracted, self.config.arnold_key)
-                    else:
-                        # Basic mode: Inverse ACM (+ optional XOR)
-                        xor_seed = None
-                        if self.config.use_xor:
-                            xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        
-                        decrypted_attention[name] = iarnold_triton(
-                            weight, 
-                            self.config.arnold_key, 
-                            xor_seed=xor_seed
-                        )
+                if self.config.mode == 'advanced':
+                    decrypted_attention[name] = iarnold_triton(
+                        weight,
+                        self.config.arnold_key,
+                        xor_seed=self.diffusion_secret,
+                        xor_context=f"attention:{layer_idx}:{name}",
+                    )
+                elif weight.is_cuda:
+                    xor_seed = None
+                    if self.config.use_xor:
+                        xor_seed = self.diffusion_secret
+                    decrypted_attention[name] = iarnold_triton(
+                        weight,
+                        self.config.arnold_key,
+                        xor_seed=xor_seed,
+                        xor_context=f"attention:{layer_idx}:{name}",
+                    )
                 else:
                     # CPU fallback
-                    if self.config.mode == 'advanced':
-                        xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                        torch.manual_seed(xor_seed)
-                        M = torch.randn_like(weight) * 0.1
-                        subtracted = (weight - M) % self.config.l_modular if self.config.l_modular != 0 else weight - M
-                        decrypted_attention[name] = iarnold_optimized(subtracted, self.config.arnold_key)
-                    else:
-                        decrypted_tensor = iarnold_optimized(weight, self.config.arnold_key)
-                        if self.config.use_xor:
-                            decrypted_tensor = xor_encrypt_decrypt_numba(
-                                decrypted_tensor, layer_idx=layer_idx, weight_name=name, seed_base=self.config.xor_seed_base
-                            )
-                        decrypted_attention[name] = decrypted_tensor
+                    decrypted_tensor = iarnold_optimized(weight, self.config.arnold_key)
+                    if self.config.use_xor:
+                        decrypted_tensor = xor_encrypt_decrypt_numba(
+                            decrypted_tensor, layer_idx=layer_idx, weight_name=name,
+                            seed_base=self.diffusion_secret
+                        )
+                    decrypted_attention[name] = decrypted_tensor
             else:
                 # Non-square matrices
                 decrypted_attention[name] = self._knuth_unshuffle(weight, layer_idx, name)
@@ -416,10 +389,6 @@ class DualEncryption:
         perm = torch.randperm(weight.shape[0], device=weight.device)
         inv_perm = torch.argsort(perm)
         
-        if self.config.mode == 'advanced':
-            M = torch.randn_like(weight) * 0.1
-            weight = (weight - M) % self.config.l_modular if self.config.l_modular != 0 else weight - M
-            
         return weight[inv_perm]
 
     def decrypt_ffn_weights(self, 
@@ -427,7 +396,7 @@ class DualEncryption:
                           permutation_matrix_idx: int = 0,
                           layer_idx: int = 0) -> Dict[str, torch.Tensor]:
         """
-        Decrypt FFN weights using inverse row permutation, optionally with modular subtraction.
+        Decrypt FFN weights using ChaCha20 removal and inverse row permutation.
         
         Args:
             encrypted_ffn: Dictionary containing encrypted FFN weights
@@ -440,11 +409,13 @@ class DualEncryption:
         decrypted_ffn = {}
         
         for name, weight in encrypted_ffn.items():
-            if self.config.mode == 'advanced':
-                xor_seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-                torch.manual_seed(xor_seed)
-                M = torch.randn_like(weight) * 0.1
-                weight = (weight - M) % self.config.l_modular if self.config.l_modular != 0 else weight - M
+            diffusion_enabled = self.config.mode == 'advanced' or self.config.use_xor
+            if diffusion_enabled:
+                weight = weight.clone()
+                xor_encrypt_decrypt_triton(
+                    weight, layer_idx=layer_idx, weight_name=name,
+                    seed_base=self.diffusion_secret
+                )
             
             if permutation_matrix_idx < len(self.permutation_matrices):
                 perm_matrix = self.permutation_matrices[permutation_matrix_idx]
@@ -461,15 +432,6 @@ class DualEncryption:
                     )
             else:
                 decrypted_ffn[name] = self._knuth_unshuffle(weight, layer_idx, name)
-                
-            # Basic mode XOR if enabled
-            if self.config.mode == 'basic' and self.config.use_xor:
-                decrypted_ffn[name] = xor_encrypt_decrypt_triton(
-                    decrypted_ffn[name], 
-                    layer_idx=layer_idx, 
-                    weight_name=name,
-                    seed_base=self.config.xor_seed_base
-                )
                 
         return decrypted_ffn
     
