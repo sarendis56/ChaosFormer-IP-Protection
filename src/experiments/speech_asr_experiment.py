@@ -50,8 +50,13 @@ def prepare_batches(
     split: str,
     max_samples: int,
     batch_size: int,
+    dataset_file: Path | None = None,
 ) -> tuple[list[dict], dict]:
-    if dataset_name == "openslr/librispeech_asr":
+    if dataset_file is not None:
+        dataset = load_dataset(
+            "parquet", data_files={split: str(dataset_file)}, split=split
+        )
+    elif dataset_name == "openslr/librispeech_asr":
         # Address only the requested parquet. Loading the repository dataset
         # builder eagerly downloads every split in the selected configuration.
         parquet_url = (
@@ -177,9 +182,10 @@ def selected_layers(total: int, layer_count: str) -> list[int] | None:
 def run(args: argparse.Namespace) -> dict:
     device = torch.device(args.device)
     dtype = torch.float16 if device.type == "cuda" else torch.float32
-    processor = Wav2Vec2Processor.from_pretrained(args.model)
+    model_source = str(args.model_path) if args.model_path else args.model
+    processor = Wav2Vec2Processor.from_pretrained(model_source)
     model = Wav2Vec2ForCTC.from_pretrained(
-        args.model, dtype=dtype, low_cpu_mem_usage=True
+        model_source, dtype=dtype, low_cpu_mem_usage=True
     ).to(device)
     model.eval()
 
@@ -190,6 +196,7 @@ def run(args: argparse.Namespace) -> dict:
         split=args.split,
         max_samples=args.samples,
         batch_size=args.batch_size,
+        dataset_file=args.dataset_file,
     )
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
@@ -255,9 +262,19 @@ def run(args: argparse.Namespace) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="facebook/wav2vec2-base-960h")
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        help="optional local checkpoint path while retaining --model as the result label",
+    )
     parser.add_argument("--dataset", default="openslr/librispeech_asr")
     parser.add_argument("--dataset-config", default="clean")
     parser.add_argument("--split", default="test")
+    parser.add_argument(
+        "--dataset-file",
+        type=Path,
+        help="optional local parquet for the requested dataset split",
+    )
     parser.add_argument("--mode", choices=["base", "secure"], default="base")
     parser.add_argument("--layers", default="6")
     parser.add_argument("--samples", type=int, default=0)

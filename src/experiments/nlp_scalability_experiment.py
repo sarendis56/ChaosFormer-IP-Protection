@@ -39,8 +39,20 @@ def _sync(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
-def _sst2_batches(tokenizer, max_samples: int, batch_size: int) -> Iterator[dict]:
-    dataset = load_dataset("glue", "sst2", split="validation")
+def _sst2_batches(
+    tokenizer,
+    max_samples: int,
+    batch_size: int,
+    sst2_file: Path | None = None,
+) -> Iterator[dict]:
+    if sst2_file is None:
+        dataset = load_dataset("glue", "sst2", split="validation")
+    else:
+        dataset = load_dataset(
+            "arrow",
+            data_files={"validation": str(sst2_file)},
+            split="validation",
+        )
     if max_samples:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 
@@ -59,11 +71,23 @@ def _sst2_batches(tokenizer, max_samples: int, batch_size: int) -> Iterator[dict
 
 
 def _causal_batches(
-    tokenizer, max_sequences: int, sequence_length: int, batch_size: int
+    tokenizer,
+    max_sequences: int,
+    sequence_length: int,
+    batch_size: int,
+    wikitext_file: Path | None = None,
 ) -> list[dict]:
-    dataset = load_dataset(
-        "wikitext", "wikitext-103-raw-v1", split="test", streaming=True
-    )
+    if wikitext_file is None:
+        dataset = load_dataset(
+            "wikitext", "wikitext-103-raw-v1", split="test", streaming=True
+        )
+    else:
+        dataset = load_dataset(
+            "parquet",
+            data_files={"test": str(wikitext_file)},
+            split="test",
+            streaming=True,
+        )
     token_ids: list[int] = []
     required = max_sequences * sequence_length + 1
     for example in dataset:
@@ -190,19 +214,24 @@ def _selected_layers(total: int, layer_count: str) -> list[int] | None:
 def run(args: argparse.Namespace) -> dict:
     device = torch.device(args.device)
     dtype = torch.float16 if device.type == "cuda" else torch.float32
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    model_source = str(args.model_path) if args.model_path else args.model
+    tokenizer = AutoTokenizer.from_pretrained(model_source)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     if args.task == "sst2":
         model = AutoModelForSequenceClassification.from_pretrained(
-            args.model, dtype=dtype
+            model_source, dtype=dtype
         ).to(device)
-        batches = list(_sst2_batches(tokenizer, args.samples, args.batch_size))
+        batches = list(
+            _sst2_batches(
+                tokenizer, args.samples, args.batch_size, args.sst2_file
+            )
+        )
         evaluator = evaluate_sst2
     else:
         if args.random_init:
-            config = AutoConfig.from_pretrained(args.model)
+            config = AutoConfig.from_pretrained(model_source)
             previous_dtype = torch.get_default_dtype()
             torch.set_default_dtype(dtype)
             try:
@@ -212,10 +241,14 @@ def run(args: argparse.Namespace) -> dict:
                 torch.set_default_dtype(previous_dtype)
         else:
             model = AutoModelForCausalLM.from_pretrained(
-                args.model, dtype=dtype, low_cpu_mem_usage=True
+                model_source, dtype=dtype, low_cpu_mem_usage=True
             ).to(device)
         batches = _causal_batches(
-            tokenizer, args.samples, args.sequence_length, args.batch_size
+            tokenizer,
+            args.samples,
+            args.sequence_length,
+            args.batch_size,
+            args.wikitext_file,
         )
         evaluator = evaluate_causal
     model.eval()
@@ -289,12 +322,27 @@ def run(args: argparse.Namespace) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        help="optional local checkpoint path while retaining --model as the result label",
+    )
     parser.add_argument("--task", choices=["sst2", "causal"], required=True)
+    parser.add_argument(
+        "--sst2-file",
+        type=Path,
+        help="optional local SST-2 validation Arrow file",
+    )
     parser.add_argument("--mode", choices=["base", "secure"], default="secure")
     parser.add_argument("--layers", default="all")
     parser.add_argument("--samples", type=int, default=128)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--sequence-length", type=int, default=256)
+    parser.add_argument(
+        "--wikitext-file",
+        type=Path,
+        help="optional local WikiText-103 test parquet for causal evaluation",
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--timing-repeats", type=int, default=5)
     parser.add_argument(

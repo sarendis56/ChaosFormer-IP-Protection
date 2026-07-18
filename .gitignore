@@ -248,3 +248,7 @@ docs/build/
 # Keep documentation
 !*.md
 !docs/*.md
+
+# Independent local repositories and reference material
+/paper/
+/references/
