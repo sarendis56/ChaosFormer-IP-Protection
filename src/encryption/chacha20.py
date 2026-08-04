@@ -18,6 +18,13 @@ import torch
 import triton
 import triton.language as tl
 
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher
+    from cryptography.hazmat.primitives.ciphers import algorithms as _crypto_algorithms
+except ImportError:  # pragma: no cover - retained for minimal installations
+    Cipher = None
+    _crypto_algorithms = None
+
 
 MasterSecret = Union[int, str, bytes, bytearray]
 
@@ -272,11 +279,24 @@ def chacha20_xor_(
         return tensor
 
     raw = tensor.detach().view(torch.uint8).numpy().reshape(-1)
-    stream = np.empty(raw.size, dtype=np.uint8)
-    for block_index in range(n_blocks):
-        block = chacha20_block(key, initial_counter + block_index, nonce)
-        start = block_index * 64
-        end = min(start + 64, raw.size)
-        stream[start:end] = np.frombuffer(block, dtype=np.uint8)[: end - start]
-    np.bitwise_xor(raw, stream, out=raw)
+    if Cipher is not None:
+        # OpenSSL's raw ChaCha20 interface uses a 32-bit little-endian counter
+        # followed by the RFC 8439 96-bit nonce. The temporary output buffer is
+        # required by cryptography's update_into contract and avoids Python-level
+        # per-block ChaCha20 calls.
+        nonce16 = struct.pack("<I", initial_counter) + nonce
+        encryptor = Cipher(_crypto_algorithms.ChaCha20(key, nonce16), mode=None).encryptor()
+        output = bytearray(raw.size + 15)
+        written = encryptor.update_into(memoryview(raw), output)
+        if written != raw.size:
+            raise RuntimeError(f"unexpected ChaCha20 output length: {written}")
+        raw[:] = np.frombuffer(output, dtype=np.uint8, count=raw.size)
+    else:  # pragma: no cover - fallback for installations without cryptography
+        stream = np.empty(raw.size, dtype=np.uint8)
+        for block_index in range(n_blocks):
+            block = chacha20_block(key, initial_counter + block_index, nonce)
+            start = block_index * 64
+            end = min(start + 64, raw.size)
+            stream[start:end] = np.frombuffer(block, dtype=np.uint8)[: end - start]
+        np.bitwise_xor(raw, stream, out=raw)
     return tensor
