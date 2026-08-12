@@ -16,7 +16,6 @@ Key Features:
 import torch
 import numpy as np
 from tqdm import tqdm
-from copy import deepcopy
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -454,70 +453,6 @@ class VitEncryptionAnalyzer:
             self.logger.info(f"Model saved to {final_dir}")
 
         return self.performance_tracker
-
-    def _add_extra_security_layers(self,
-                                 output_base: Path,
-                                 save_checkpoints: bool) -> None:
-        """
-        Add extra security layers by encrypting additional random layers.
-
-        Args:
-            output_base: Base directory for saving checkpoints
-            save_checkpoints: Whether to save checkpoints
-        """
-        self.logger.info("Adding extra security layers...")
-
-        # Get the actual number of layers from the model
-        num_layers = len(get_transformer_layers(self.model))
-        available_layers = [i for i in range(num_layers) if i not in self.encrypted_layers]
-
-        if not available_layers:
-            self.logger.info("No more layers available for extra security encryption")
-            return
-
-        # Randomly select layers for extra security
-        num_extra = min(self.num_extra_layers, len(available_layers))
-        extra_layers = random.sample(available_layers, num_extra)
-
-        for idx, layer_idx in enumerate(extra_layers):
-            # Randomly select a permutation matrix
-            perm_matrix_idx = random.randint(0, len(self.dual_encryptor.permutation_matrices) - 1)
-
-            # Encrypt the layer
-            attention_weights, ffn_weights = self._get_layer_weights(layer_idx)
-            encryption_result = self.dual_encryptor.encrypt_layer_weights(
-                attention_weights,
-                ffn_weights,
-                permutation_matrix_idx=perm_matrix_idx
-            )
-
-            self._apply_encrypted_weights(
-                layer_idx,
-                encryption_result.encrypted_attention,
-                encryption_result.encrypted_ffn
-            )
-
-            self.encrypted_layers.add(layer_idx)
-
-            # Evaluate current accuracy
-            metrics = self.evaluator.evaluate_model(self.model, self.processor)
-            accuracy = metrics.top1_accuracy / 100
-
-            self.performance_tracker.add_encryption_step(
-                layer_idx=layer_idx,
-                accuracy=accuracy,
-                permutation_matrix_idx=perm_matrix_idx,
-                arnold_key=self.dual_encryptor.config.arnold_key
-            )
-
-            self.logger.info(f"Extra security layer {idx + 1}/{num_extra}: "
-                           f"Encrypted layer {layer_idx} with permutation matrix {perm_matrix_idx}")
-            self.logger.info(f"Current accuracy: {accuracy:.2%}")
-
-            # Save checkpoint
-            if save_checkpoints:
-                checkpoint_dir = output_base / f"extra_security_{idx}"
-                self._save_model_checkpoint(checkpoint_dir)
 
     def _save_model_checkpoint(self, checkpoint_dir: Path) -> None:
         """

@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
-from transformers import AutoImageProcessor, AutoModelForImageClassification, DeiTImageProcessor
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 from .metrics import PerformanceTracker
 from ..encryption.dual_encryption import DualEncryption
@@ -271,64 +271,3 @@ def verify_model_integrity(model,
         
     except Exception:
         return False
-
-
-def create_model_backup(model,
-                       backup_path: Path) -> None:
-    """
-    Create a backup of the model before encryption.
-    
-    Args:
-        model: Model to backup
-        backup_path: Path to save the backup
-    """
-    backup_path = Path(backup_path)
-    backup_path.mkdir(parents=True, exist_ok=True)
-    
-    # Save model state dict
-    torch.save(model.state_dict(), backup_path / "model_state_dict.pt")
-    
-    # Save model configuration
-    model.save_pretrained(backup_path / "model_config")
-    
-    # Create backup metadata
-    backup_metadata = {
-        "backup_timestamp": datetime.now().isoformat(),
-        "model_type": type(model).__name__,
-        "num_parameters": sum(p.numel() for p in model.parameters()),
-        "device": str(model.device)
-    }
-    
-    with open(backup_path / "backup_metadata.json", "w") as f:
-        json.dump(backup_metadata, f, indent=4)
-    
-    print(f"Model backup saved to {backup_path}")
-
-
-def restore_model_from_backup(backup_path: Path,
-                             device: str = "cuda"):
-    """
-    Restore model from backup.
-    
-    Args:
-        backup_path: Path to the backup
-        device: Device to load the model on
-        
-    Returns:
-        ViTForImageClassification: Restored model
-    """
-    backup_path = Path(backup_path)
-    
-    # Load model from config
-    model = AutoModelForImageClassification.from_pretrained(backup_path / "model_config")
-    
-    # Load state dict
-    state_dict_path = backup_path / "model_state_dict.pt"
-    if state_dict_path.exists():
-        state_dict = torch.load(state_dict_path, map_location=device)
-        model.load_state_dict(state_dict)
-    
-    model = model.to(device)
-    model.eval()
-    
-    return model

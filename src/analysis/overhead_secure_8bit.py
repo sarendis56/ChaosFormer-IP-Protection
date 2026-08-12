@@ -65,18 +65,6 @@ class TimingBreakdown:
     xor_dec_time: float = 0.0
     overhead_ratio: float = 1.0
 
-    @property
-    def encryption_time(self) -> float:
-        return self.acm_enc_time + self.ffn_enc_time + self.xor_enc_time
-
-    @property
-    def decryption_time(self) -> float:
-        return self.acm_dec_time + self.ffn_dec_time + self.xor_dec_time
-
-    @property
-    def total_overhead_time(self) -> float:
-        return self.encryption_time + self.decryption_time
-
 
 class InferenceOverheadAnalyzer:
     """Analyzer for measuring triple encryption inference overhead (ACM + FFN + XOR)."""
@@ -338,47 +326,6 @@ class InferenceOverheadAnalyzer:
         if self.device.type == 'cuda':
             # Sync the selected device (not just the current default).
             torch.cuda.synchronize(self.device)
-
-    def _time_operation(self, operation, num_runs: int = 1, warmup_runs: int = 3) -> float:
-        """Generic timing function for any operation with warmup."""
-        # Warm-up runs
-        for _ in range(warmup_runs):
-            operation()
-        
-        # Actual timing runs
-        times = []
-        for _ in range(num_runs):
-            self._synchronize()
-            start_time = time.perf_counter()
-            operation()
-            self._synchronize()
-            times.append(time.perf_counter() - start_time)
-        
-        return np.mean(times)
-
-    def _time_forward_pass(self, model: torch.nn.Module, input_tensor: torch.Tensor, num_runs: int = 1) -> float:
-        """Measure forward pass time for a model."""
-        def forward():
-            with torch.no_grad():
-                _ = model(input_tensor)
-        return self._time_operation(forward, num_runs)
-
-    def _time_acm_operation(self, matrix: torch.Tensor, key: List[int], is_encrypt: bool = True, num_runs: int = 1) -> float:
-        """Measure ACM encryption/decryption time using optimized functions."""
-        op = self.arnold_encrypt if is_encrypt else self.arnold_decrypt
-        def acm_op():
-            _ = op(matrix, key)
-        return self._time_operation(acm_op, num_runs)
-
-    def _time_ffn_operation(self, matrix: torch.Tensor, perm_indices: torch.Tensor, is_encrypt: bool = True, num_runs: int = 1) -> float:
-        """Measure FFN permutation encryption/decryption time."""
-        def ffn_op():
-            if is_encrypt:
-                _ = matrix[:, perm_indices]
-            else:
-                inv_perm = torch.argsort(perm_indices)
-                _ = matrix[:, inv_perm]
-        return self._time_operation(ffn_op, num_runs)
 
     def _time_realistic_encrypted_inference(self, encrypted_layers: List[int], acm_key: List[int], 
                                            num_runs: int = None, warmup_runs: int = 3) -> Dict[str, float]:
