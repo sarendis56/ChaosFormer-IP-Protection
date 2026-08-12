@@ -101,13 +101,13 @@ def apply_layer_weights(layer, encrypted_attention: Dict[str, torch.Tensor], enc
     """
     Apply encrypted weights back into a transformer layer.
     """
-    _getattr_chain(layer, ("attention", "attention", "query")).weight.data = encrypted_attention["query"]
-    _getattr_chain(layer, ("attention", "attention", "key")).weight.data = encrypted_attention["key"]
-    _getattr_chain(layer, ("attention", "attention", "value")).weight.data = encrypted_attention["value"]
-    _getattr_chain(layer, ("attention", "output", "dense")).weight.data = encrypted_attention["output"]
-
-    _getattr_chain(layer, ("intermediate", "dense")).weight.data = encrypted_ffn["intermediate"]
-    _getattr_chain(layer, ("output", "dense")).weight.data = encrypted_ffn["output"]
+    with torch.no_grad():
+        _getattr_chain(layer, ("attention", "attention", "query")).weight.copy_(encrypted_attention["query"])
+        _getattr_chain(layer, ("attention", "attention", "key")).weight.copy_(encrypted_attention["key"])
+        _getattr_chain(layer, ("attention", "attention", "value")).weight.copy_(encrypted_attention["value"])
+        _getattr_chain(layer, ("attention", "output", "dense")).weight.copy_(encrypted_attention["output"])
+        _getattr_chain(layer, ("intermediate", "dense")).weight.copy_(encrypted_ffn["intermediate"])
+        _getattr_chain(layer, ("output", "dense")).weight.copy_(encrypted_ffn["output"])
 
 
 def get_classifier_in_features(model) -> int:

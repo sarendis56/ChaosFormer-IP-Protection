@@ -9,7 +9,6 @@ Permutation-based encryption for Feed-Forward Network (FFN) weights.
 import torch
 import hmac
 import hashlib
-import numpy as np
 from typing import Optional, Union
 
 
@@ -49,10 +48,9 @@ def generate_permutation_matrix(size: int = 768,
         # Get the hash value and convert to integer for seed
         seed = int.from_bytes(h.digest()[:8], byteorder='big')
         
-    torch.manual_seed(seed)
-    
-    # Generate random permutation indices
-    indices = torch.randperm(size)
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    indices = torch.randperm(size, generator=generator)
     # Create permutation matrix
     P = torch.eye(size)  
     P = P[:, indices]

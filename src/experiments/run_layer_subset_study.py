@@ -49,13 +49,13 @@ def inference_jobs(
     model_paths: dict[str, Path] | None = None,
     data_dir: Path = DEFAULT_DATA_DIR,
 ) -> list[Job]:
-    script = "src/experiments/layer_subset_mechanism_experiment.py"
     model_paths = {} if model_paths is None else model_paths
     jobs = []
     for model in (DEIT, VIT):
         common = (
             sys.executable,
-            script,
+            "-m",
+            "src.experiments.layer_subset_mechanism_experiment",
             "--model",
             model,
             "--data-dir",
@@ -80,7 +80,8 @@ def retraining_job(
     name = f"{phase}__{model.replace('/', '__')}__{subset}__{attacker}__seed{seed}"
     command = (
         sys.executable,
-        "src/experiments/layer_subset_retraining_experiment.py",
+        "-m",
+        "src.experiments.layer_subset_retraining_experiment",
         "--model",
         model,
         "--data-dir",

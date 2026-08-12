@@ -17,7 +17,7 @@ from torchvision.transforms import v2 as transforms_v2
 from torchvision.datasets import ImageFolder
 import torch.nn.functional as F
 
-from ImageNetEval import load_synset_mapping, ImageNetValidationDataset, validate_model
+from src.attacks.ImageNetEval import ImageNetValidationDataset, load_synset_mapping, validate_model
 import argparse
 import json
 

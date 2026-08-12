@@ -103,6 +103,29 @@ class ChaCha20DiffusionTest(unittest.TestCase):
                 cipher.verify_encryption_cycle(attention, ffn, layer_idx=2)
             )
 
+    def test_dual_encryption_cpu_uses_device_independent_attention_material(self) -> None:
+        from src.encryption.dual_encryption import DualEncryption
+
+        cipher = DualEncryption(
+            master_secret="test-device-root",
+            num_permutation_matrices=0,
+            matrix_size=8,
+            device="cpu",
+            mode="basic",
+            use_xor=True,
+        )
+        original = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+        expected = arnold_triton(
+            original,
+            cipher.config.arnold_key,
+            xor_seed=cipher.diffusion_secret,
+            xor_context="attention:2:query",
+        )
+        actual = cipher.encrypt_attention_weights(
+            {"query": original}, layer_idx=2
+        )["query"]
+        self.assertTrue(torch.equal(actual.view(torch.int32), expected.view(torch.int32)))
+
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
     def test_gpu_matches_cpu_and_round_trips_fp16(self) -> None:
         original = torch.arange(1024, dtype=torch.float16)

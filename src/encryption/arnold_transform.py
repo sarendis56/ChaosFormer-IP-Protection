@@ -20,12 +20,8 @@ def _arnold_numba_kernel(input_matrix, output_matrix, h, w, a_final, b_final, c_
     """Numba JIT kernel for Arnold Cat Map."""
     for i in prange(h):
         for j in range(w):
-            # i is row, j is column
-            # x' = (a*x + b*y) mod w
-            # y' = (c*x + d*y) mod h
-            # Here x is row (i), y is column (j)
-            new_i = (a_final * i + b_final * j) % h
-            new_j = (c_final * i + d_final * j) % w
+            new_j = (a_final * j + b_final * i) % w
+            new_i = (c_final * j + d_final * i) % h
             output_matrix[new_i, new_j] = input_matrix[i, j]
 
 
@@ -215,83 +211,8 @@ def iarnold_triton(
 
 
 def arnold(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:
-    """
-    Apply Arnold Cat Map transformation to encrypt a matrix.
-    
-    The Arnold Cat Map is defined by the transformation:
-    [x']   [1 1] [x]     [a b] [x]
-    [y'] = [1 2] [y] or  [c d] [y]  (mod N)
-    
-    where the determinant (ad - bc) ≡ 1 (mod N) for invertibility.
-    
-    Args:
-        matrix: Input matrix to encrypt. Must be square (H x W x ...).
-        key: Arnold key parameters [N, a, b, c, d] where:
-            - N: Number of iterations
-            - a, b, c, d: Transformation matrix parameters
-            
-    Returns:
-        torch.Tensor: Encrypted matrix with same shape as input
-        
-    Raises:
-        ValueError: If matrix is not square or key parameters are invalid
-        
-    Example:
-        >>> matrix = torch.randn(768, 768)
-        >>> key = [3, 1, 1, 1, 2]  # N=3 iterations, standard Arnold map
-        >>> encrypted = arnold(matrix, key)
-    """
-    N, a, b, c, d = key
-    h, w = matrix.shape[:2]
-
-    if h != w:
-        raise ValueError("Matrix must be square")
-    if (a * d - b * c) % w != 1:
-        raise ValueError("Invalid Arnold key: determinant must be 1 (mod w)")
-
-    # Ensure tensor is a torch tensor and get its device
-    if not isinstance(matrix, torch.Tensor):
-        matrix = torch.from_numpy(matrix)
-
-    device = matrix.device
-
-    # Get coordinate grids (using cache if available)
-    x_orig_grid, y_orig_grid = _get_coordinate_grids(h, w, device)
-    
-    # ``_get_coordinate_grids`` returns Cartesian coordinates: x is the column
-    # index and y is the row index.
-    x_coords_to_transform = x_orig_grid.flatten()
-    y_coords_to_transform = y_orig_grid.flatten()
-
-    # Transform coordinates N times to find final destinations (no matrix operations yet)
-    # Arnold transform: [x'] = [a b] [x] mod w, where x is row, y is col
-    #                  [y']   [c d] [y] mod h
-    final_dest_x = x_coords_to_transform.clone()  # Final row position
-    final_dest_y = y_coords_to_transform.clone()  # Final column position
-
-    for _ in range(N):
-        next_dest_x = (a * final_dest_x + b * final_dest_y) % w
-        next_dest_y = (c * final_dest_x + d * final_dest_y) % h
-        final_dest_x = next_dest_x
-        final_dest_y = next_dest_y
-
-    # Calculate final destination indices for scatter operation
-    # Row-major indexing: row * width + col
-    # With indexing='ij', x_orig_grid represents rows, y_orig_grid represents columns
-    # So final_dest_x is row, final_dest_y is col
-    final_dest_flat_indices = (final_dest_x * w + final_dest_y).long()
-
-    # Reshape original matrix and prepare output buffer
-    original_matrix_flat = matrix.reshape(h * w, -1)
-    output_flat = torch.zeros_like(original_matrix_flat)
-
-    # Single efficient scatter: put original elements in their final positions
-    output_flat.index_copy_(0, final_dest_flat_indices, original_matrix_flat)
-
-    result = output_flat.reshape(matrix.shape)
-
-    # Ensure the result is contiguous for saving
-    return result.contiguous()
+    """Apply the Arnold Cat Map transformation."""
+    return arnold_optimized(matrix, key)
 
 
 # Global cache for coordinate grids to avoid recreating them every time
@@ -543,43 +464,8 @@ def iarnold_optimized(
 
 
 def iarnold(matrix: Union[torch.Tensor, np.ndarray], key: List[int]) -> torch.Tensor:
-    """
-    Apply inverse Arnold Cat Map transformation to decrypt a matrix.
-    
-    This function computes the inverse transformation by calculating the
-    inverse of the Arnold transformation matrix modulo the matrix width.
-    
-    Args:
-        matrix: Encrypted matrix to decrypt. Must be square.
-        key: Arnold key parameters [N, a, b, c, d] (same as used for encryption)
-        
-    Returns:
-        torch.Tensor: Decrypted matrix with same shape as input
-        
-    Raises:
-        ValueError: If key parameters are invalid
-        
-    Example:
-        >>> encrypted_matrix = arnold(original_matrix, key)
-        >>> decrypted_matrix = iarnold(encrypted_matrix, key)
-        >>> torch.allclose(original_matrix, decrypted_matrix)  # Should be True
-    """
-    N, a, b, c, d = key
-    h, w = matrix.shape[:2]
-    
-    if (a * d - b * c) % w != 1:
-        raise ValueError("Invalid Arnold key: determinant must be 1 (mod w)")
-
-    # Compute inverse transformation matrix
-    inv_key_matrix = np.array([[d, -b],
-                               [-c, a]]) % w
-    inv_key = [N,
-               inv_key_matrix[0, 0],
-               inv_key_matrix[0, 1],
-               inv_key_matrix[1, 0],
-               inv_key_matrix[1, 1]]
-    
-    return arnold(matrix, inv_key)
+    """Apply the inverse Arnold Cat Map transformation."""
+    return iarnold_optimized(matrix, key)
 
 
 def generate_arnold_key(matrix_size: int, iterations: Optional[int] = None, 
@@ -600,16 +486,15 @@ def generate_arnold_key(matrix_size: int, iterations: Optional[int] = None,
     Returns:
         List[int]: Valid Arnold key [N, a, b, c, d]
     """
-    if seed is not None:
-        np.random.seed(seed)
+    rng = np.random.RandomState(seed) if seed is not None else np.random
     
     if iterations is None:
-        iterations = np.random.randint(3, 35) # Range [3, 34]
+        iterations = rng.randint(3, 35) # Range [3, 34]
     
     # Use the construction [[1, p], [q, pq + 1]] to guarantee det = 1
     # p and q are sampled from [1, matrix_size - 1]
-    p = np.random.randint(1, matrix_size)
-    q = np.random.randint(1, matrix_size)
+    p = rng.randint(1, matrix_size)
+    q = rng.randint(1, matrix_size)
     
     a = 1
     b = p

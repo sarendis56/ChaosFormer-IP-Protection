@@ -5,7 +5,12 @@ import unittest
 from src.encryption.arnold_transform import (
     _matrix_power_mod,
     _matrix_power_mod_fixed_schedule,
+    arnold,
+    arnold_numba,
     arnold_optimized,
+    generate_arnold_key,
+    iarnold,
+    iarnold_numba,
     iarnold_optimized,
 )
 
@@ -44,6 +49,25 @@ class FixedScheduleTest(unittest.TestCase):
             self.assertTrue(torch.equal(fixed_encrypted, original_encrypted))
             self.assertTrue(torch.equal(fixed_inverse, original_inverse))
             self.assertTrue(torch.equal(original_inverse, matrix))
+
+    def test_cpu_implementations_match_and_round_trip(self):
+        matrix = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+
+        for power in (0, 1, 3, 7):
+            key = [power, 1, 1, 1, 2]
+            expected = arnold_optimized(matrix, key)
+            self.assertTrue(torch.equal(arnold(matrix, key), expected))
+            self.assertTrue(torch.equal(arnold_numba(matrix, key), expected))
+            self.assertTrue(torch.equal(iarnold(expected, key), matrix))
+            self.assertTrue(torch.equal(iarnold_numba(expected, key), matrix))
+
+    def test_key_generation_does_not_change_global_numpy_rng(self):
+        np.random.seed(7)
+        expected = np.random.random(4)
+        np.random.seed(7)
+        generate_arnold_key(8, seed=42)
+        np.testing.assert_array_equal(np.random.random(4), expected)
+        self.assertEqual(generate_arnold_key(8, seed=42), [9, 1, 4, 5, 5])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Compute hidden-representation (linear CKA) damage for increasing numbers of encrypted ViT-B layers (2 base layers + 0..4 extra security layers), to be paired with the retraining attack accuracies in manuscript Table 16.
 
 Usage (from repo root):
-    python src/experiments/extra_layers_cka.py --device cuda:0
+    python -m src.experiments.extra_layers_cka --device cuda:0
 """
 import argparse
 import json

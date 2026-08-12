@@ -95,6 +95,10 @@ def test_preregistered_launcher_phase_sizes():
     assert len(jobs_for_phase("vit_confirm")) == 6
 
     default_command = jobs_for_phase("short")[0].command
+    assert default_command[1:3] == (
+        "-m",
+        "src.experiments.layer_subset_retraining_experiment",
+    )
     assert "/data/peichun" not in " ".join(default_command)
     assert "--model-path" not in default_command
 

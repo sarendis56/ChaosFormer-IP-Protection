@@ -12,7 +12,7 @@ import logging
 
 from .arnold_transform import (
     get_standard_key,
-    arnold_triton, iarnold_triton, arnold_optimized, iarnold_optimized,
+    arnold_triton, iarnold_triton,
     generate_arnold_key
 )
 from .permutation import (
@@ -21,7 +21,6 @@ from .permutation import (
     decrypt_ffn_weight_row_permutation
 )
 from .xor_encryption import (
-    xor_encrypt_decrypt_numba,
     xor_encrypt_decrypt_triton,
     get_stable_seed,
 )
@@ -227,32 +226,17 @@ class DualEncryption:
         for name, weight in attention_weights.items():
             # Apply permutation first (ACM for square matrices)
             if weight.shape[0] == weight.shape[1]:
-                if self.config.mode == 'advanced':
-                    encrypted_attention[name] = arnold_triton(
-                        weight,
-                        self.config.arnold_key,
-                        xor_seed=self.diffusion_secret,
-                        xor_context=f"attention:{layer_idx}:{name}",
-                    )
-                elif weight.is_cuda:
-                    xor_seed = None
-                    if self.config.use_xor:
-                        xor_seed = self.diffusion_secret
-                    encrypted_attention[name] = arnold_triton(
-                        weight,
-                        self.config.arnold_key,
-                        xor_seed=xor_seed,
-                        xor_context=f"attention:{layer_idx}:{name}",
-                    )
-                else:
-                    # CPU fallback
-                    if self.config.use_xor:
-                        weight = weight.clone()
-                        xor_encrypt_decrypt_numba(
-                            weight, layer_idx=layer_idx, weight_name=name,
-                            seed_base=self.diffusion_secret
-                        )
-                    encrypted_attention[name] = arnold_optimized(weight, self.config.arnold_key)
+                diffusion_secret = (
+                    self.diffusion_secret
+                    if self.config.mode == 'advanced' or self.config.use_xor
+                    else None
+                )
+                encrypted_attention[name] = arnold_triton(
+                    weight,
+                    self.config.arnold_key,
+                    xor_seed=diffusion_secret,
+                    xor_context=f"attention:{layer_idx}:{name}",
+                )
             else:
                 # Non-square matrices (if any in attention, though usually they are square)
                 # Apply Knuth Shuffle (simulated by random permutation)
@@ -263,10 +247,9 @@ class DualEncryption:
     def _knuth_shuffle(self, weight: torch.Tensor, layer_idx: int, name: str) -> torch.Tensor:
         """Simulate Knuth Shuffle using deterministic random permutation."""
         seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-        torch.manual_seed(seed)
-        
-        # Row permutation for non-square matrices
-        perm = torch.randperm(weight.shape[0], device=weight.device)
+        generator = torch.Generator(device=weight.device)
+        generator.manual_seed(seed)
+        perm = torch.randperm(weight.shape[0], device=weight.device, generator=generator)
         permuted = weight[perm]
         
         return permuted
@@ -349,32 +332,17 @@ class DualEncryption:
         
         for name, weight in encrypted_attention.items():
             if weight.shape[0] == weight.shape[1]:
-                if self.config.mode == 'advanced':
-                    decrypted_attention[name] = iarnold_triton(
-                        weight,
-                        self.config.arnold_key,
-                        xor_seed=self.diffusion_secret,
-                        xor_context=f"attention:{layer_idx}:{name}",
-                    )
-                elif weight.is_cuda:
-                    xor_seed = None
-                    if self.config.use_xor:
-                        xor_seed = self.diffusion_secret
-                    decrypted_attention[name] = iarnold_triton(
-                        weight,
-                        self.config.arnold_key,
-                        xor_seed=xor_seed,
-                        xor_context=f"attention:{layer_idx}:{name}",
-                    )
-                else:
-                    # CPU fallback
-                    decrypted_tensor = iarnold_optimized(weight, self.config.arnold_key)
-                    if self.config.use_xor:
-                        decrypted_tensor = xor_encrypt_decrypt_numba(
-                            decrypted_tensor, layer_idx=layer_idx, weight_name=name,
-                            seed_base=self.diffusion_secret
-                        )
-                    decrypted_attention[name] = decrypted_tensor
+                diffusion_secret = (
+                    self.diffusion_secret
+                    if self.config.mode == 'advanced' or self.config.use_xor
+                    else None
+                )
+                decrypted_attention[name] = iarnold_triton(
+                    weight,
+                    self.config.arnold_key,
+                    xor_seed=diffusion_secret,
+                    xor_context=f"attention:{layer_idx}:{name}",
+                )
             else:
                 # Non-square matrices
                 decrypted_attention[name] = self._knuth_unshuffle(weight, layer_idx, name)
@@ -384,9 +352,9 @@ class DualEncryption:
     def _knuth_unshuffle(self, weight: torch.Tensor, layer_idx: int, name: str) -> torch.Tensor:
         """Simulate Knuth Unshuffle."""
         seed = get_stable_seed(layer_idx, name, self.config.xor_seed_base)
-        torch.manual_seed(seed)
-        
-        perm = torch.randperm(weight.shape[0], device=weight.device)
+        generator = torch.Generator(device=weight.device)
+        generator.manual_seed(seed)
+        perm = torch.randperm(weight.shape[0], device=weight.device, generator=generator)
         inv_perm = torch.argsort(perm)
         
         return weight[inv_perm]
