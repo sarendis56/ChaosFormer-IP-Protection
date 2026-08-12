@@ -252,3 +252,4 @@ docs/build/
 # Independent local repositories and reference material
 /paper/
 /references/
+/.reasonix/

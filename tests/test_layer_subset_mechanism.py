@@ -124,3 +124,14 @@ def test_imagenet_shard_preregistration_is_unique_and_deterministic():
     assert first == second
     assert len(first) == len(set(first)) == 60
     assert all(name.startswith("train-") and name.endswith("-of-00294.parquet") for name in first)
+
+
+def test_extra_layers_cka_ranks_damage_with_stable_ties():
+    from src.experiments.extra_layers_cka import rank_by_accuracy_drop
+
+    impacts = [
+        {"layer": 2, "accuracy_drop": 0.4},
+        {"layer": 1, "accuracy_drop": 0.4},
+        {"layer": 0, "accuracy_drop": 0.1},
+    ]
+    assert rank_by_accuracy_drop(impacts) == [1, 2, 0]
