@@ -128,12 +128,13 @@ def benchmark(args) -> dict[str, object]:
     )
     clean_state = {name: value.detach().clone() for name, value in model.state_dict().items()}
 
-    for _ in range(5):
-        model(pixel_values=inputs)
-    baseline_samples = [
-        _time(lambda: model(pixel_values=inputs), args.repetitions)
-        for _ in range(args.trials)
-    ]
+    with torch.inference_mode():
+        for _ in range(5):
+            model(pixel_values=inputs)
+        baseline_samples = [
+            _time(lambda: model(pixel_values=inputs), args.repetitions)
+            for _ in range(args.trials)
+        ]
 
     aggregate = statistics.mean if args.aggregate == "mean" else statistics.median
     result: dict[str, object] = {
