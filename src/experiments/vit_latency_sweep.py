@@ -1,7 +1,8 @@
 """End-to-end ViT-B latency for baseline, ChaosFormer and ChaosFormer-S (ChaCha20).
 
 Every configuration is timed with the same boundary: synchronize,
-R x [decrypt selected layers -> forward -> re-encrypt], synchronize. No per-stage synchronization inside the timed
+R x [decrypt selected layers -> forward -> re-encrypt], synchronize. On CUDA, decrypt and re-encrypt
+each replay a captured CUDA graph. No per-stage synchronization inside the timed
 region. Baseline and protected trials alternate (forward/reverse order) and
 the median over trials is reported. A separate, explicitly instrumented pass
 (per-stage synchronization) gives a stage breakdown only.
@@ -25,8 +26,14 @@ from pathlib import Path
 import torch
 from transformers import ViTConfig, ViTForImageClassification
 
-from src.encryption.arnold_transform import arnold_numba, arnold_triton, iarnold_numba, iarnold_triton
+from src.encryption.arnold_transform import (
+    arnold_numba,
+    arnold_triton,
+    iarnold_numba,
+    iarnold_triton,
+)
 from src.encryption.chacha20 import chacha20_xor_, derive_chacha20_material
+from src.encryption.transformer_cipher import graph_replays
 from src.encryption.xor_encryption import get_stable_seed
 
 SECRET = b"chaosformer-latency"
@@ -123,6 +130,13 @@ def breakdown(model, scheme, x, reps, device) -> dict:
 def measure(model, x, layers, n, trials, reps, device) -> dict:
     fwd = torch.inference_mode()(lambda: model(pixel_values=x))
     schemes = {mode: Scheme(model, layers, mode, n, device) for mode in ("base", "secure")}
+    with torch.inference_mode():  # weights start and end in plaintext, so encrypt first
+        graphs = {}
+        for mode, s in schemes.items():
+            s.encrypt()
+            steps = [s.decrypt, s.encrypt]
+            graphs[mode] = graph_replays(steps) if device.type == "cuda" else steps
+            s.decrypt()
     samples = {name: [] for name in ("baseline", *schemes)}
     for trial in range(trials):
         for name in samples if trial % 2 == 0 else reversed(samples):
@@ -130,11 +144,12 @@ def measure(model, x, layers, n, trials, reps, device) -> dict:
                 samples[name].append(timed(fwd, reps, device))
                 continue
             s = schemes[name]
+            decrypt, encrypt = graphs[name]
 
-            def run(s=s):
-                s.decrypt()
+            def run(decrypt=decrypt, encrypt=encrypt):
+                decrypt()
                 fwd()
-                s.encrypt()
+                encrypt()
 
             with torch.inference_mode():  # one scheme applied at a time; weights end in plaintext
                 s.encrypt()
@@ -158,7 +173,7 @@ def environment(args, device, reps) -> dict:
     import transformers
     import triton
 
-    cpu = subprocess.run("lscpu | grep 'Model name'", shell=True, capture_output=True, text=True).stdout
+    cpu = subprocess.run("lscpu | grep 'Model name'", check=False, shell=True, capture_output=True, text=True).stdout
     cpu = cpu.split(":")[-1].strip()
     return {"device": torch.cuda.get_device_name(device) if device.type == "cuda" else cpu,
             "cpu": cpu, "python": platform.python_version(), "torch": torch.__version__,

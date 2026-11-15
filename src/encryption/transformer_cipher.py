@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator
 
 import torch
 from torch import nn
@@ -237,23 +237,33 @@ class TransformerCipher:
 
     @contextmanager
     def authorized_inference(self) -> Iterator[None]:
-        """Decrypt immediately before each protected layer and re-encrypt after it."""
+        """Decrypt immediately before each protected layer and re-encrypt after it.
+
+        On CUDA, each layer's decrypt and re-encrypt are captured once as CUDA
+        graphs, so a forward pass issues two launches per protected layer.
+        """
         if not self.encrypted:
             raise RuntimeError("authorized inference expects encrypted-at-rest weights")
+        steps = [
+            step
+            for layer in self.layer_specs
+            for step in (
+                lambda layer=layer: self.decrypt_layer(layer),
+                lambda layer=layer: self.encrypt_layer(layer),
+            )
+        ]
+        if self.layer_specs and self.layer_specs[0].weights[0].parameter.is_cuda:
+            steps = graph_replays(steps)
         handles: list[torch.utils.hooks.RemovableHandle] = []
-
-        for layer in self.layer_specs:
+        for layer, decrypt, encrypt in zip(self.layer_specs, steps[::2], steps[1::2]):
             handles.append(
                 layer.module.register_forward_pre_hook(
-                    lambda _module, _inputs, layer=layer: self.decrypt_layer(layer)
+                    lambda _module, _inputs, decrypt=decrypt: decrypt()
                 )
             )
             handles.append(
                 layer.module.register_forward_hook(
-                    lambda _module, _inputs, output, layer=layer: (
-                        self.encrypt_layer(layer),
-                        output,
-                    )[1],
+                    lambda _module, _inputs, output, encrypt=encrypt: (encrypt(), output)[1],
                     always_call=True,
                 )
             )
@@ -262,3 +272,26 @@ class TransformerCipher:
         finally:
             for handle in handles:
                 handle.remove()
+
+
+def graph_replays(steps: list[Callable[[], None]]) -> list[Callable[[], None]]:
+    """Capture each CUDA step as a graph and return the replay callables.
+
+    Running ``steps`` in order must leave the weights unchanged (e.g. decrypt
+    then encrypt), because they run once eagerly to warm up kernels. Replays
+    must follow the capture order, since the graphs share one memory pool.
+    """
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        for step in steps:
+            step()
+    torch.cuda.current_stream().wait_stream(stream)
+    pool = torch.cuda.graph_pool_handle()
+    replays = []
+    for step in steps:
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, pool=pool):  # records kernels, does not run them
+            step()
+        replays.append(graph.replay)
+    return replays
