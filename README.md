@@ -195,6 +195,40 @@ for checkpoint in results/attacks/attack_*; do
 done
 ```
 
+### Partial-Key Recovery
+
+Clean ImageNet accuracy (all 50,000 validation images) and the K=6 accuracy
+when only the attention (ACM) keys or only the FFN keys are recovered:
+
+```bash
+uv run python -m src.experiments.vision_partial_key_eval --data-dir data/imagenet-1k --device cuda:0
+```
+
+### Retraining Attacks on RoBERTa
+
+The attacker fine-tunes a protected RoBERTa classifier with 20% of the training
+data, starting from the encrypted checkpoint (`base_k6`, `secure_all`) or after
+re-initializing the encrypted matrices (`base_k6_reinit`, `secure_all_reinit`).
+Baselines: `origin`, `public`, `randinit`.
+
+```bash
+# 20 Newsgroups victim (fine-tuned roberta-base, full training set)
+uv run python -m src.experiments.roberta_retraining_attack --task 20ng --setup victim --lr 3e-5 --epochs 10 --batch-size 16
+# One attack run; repeat over --lr {1e-5,3e-5,1e-4} and --seed {0,1,2}
+uv run python -m src.experiments.roberta_retraining_attack --task 20ng --setup secure_all_reinit --lr 1e-4 --seed 0 --epochs 10 --batch-size 16
+uv run python -m src.experiments.roberta_retraining_attack --task sst2 --setup base_k6_reinit --lr 3e-5 --seed 0
+```
+
+### SRAM-PUF Key Reconstruction
+
+Fuzzy-extractor reliability, entropy accounting, and reconstruction timing on
+the public Arduino UNO SRAM-PUF corpus:
+
+```bash
+uv run python -m src.analysis.puf_fuzzy_extractor --dataset-root <Raw_data_UNO>
+taskset -c 2 uv run python -m src.analysis.puf_entropy --dataset-root <Raw_data_UNO>
+```
+
 ### Visualization Demo (ACM + Diffusion on Images)
 
 To visually demonstrate how Arnold Cat Map (ACM) and diffusion-style (XOR-based) encryption obfuscate images, use the small demo script:
@@ -269,25 +303,20 @@ and does not allocate a tensor-sized key.
 
 ### Inference Overhead Analysis
 
-Detailed analysis of dual encryption inference overhead during model execution:
+End-to-end ViT-B latency (batch size 64) for the baseline, `ChaosFormer`, and
+`ChaosFormer-S`, sweeping the number of encrypted layers and ACM iterations.
+Every configuration is timed with one boundary: synchronize, R x (decrypt ->
+forward -> re-encrypt), synchronize. The reported value is the median of
+alternating baseline/protected trials.
 
 ```bash
-# With uv
-uv run src/analysis/overhead_secure.py --device cuda:0 --triton # Use triton for faster execution
-uv run src/analysis/overhead_secure.py --device cpu
-uv run src/analysis/overhead_secure_8bit.py --device cuda:0 --triton
-
-# If when running the cpu one with numba triggers "NumbaWarning" with TBB versioning issue, try:
-LD_LIBRARY_PATH=$PWD/.venv/lib:$LD_LIBRARY_PATH uv run src/analysis/overhead_secure.py --device cpu
-
-# With activated venv
-python src/analysis/overhead_secure.py
+uv run python -m src.experiments.vit_latency_sweep --device cuda:0 --trials 15 --reps 20 \
+    --output results/latency/gpu.json
+# CPU: use Numba's workqueue layer; the default layer busy-waits on PyTorch's cores.
+NUMBA_THREADING_LAYER=workqueue uv run python -m src.experiments.vit_latency_sweep \
+    --device cpu --threads 32 --trials 5 --reps 10 --output results/latency/cpu.json
+uv run python -m src.analysis.plot_overhead   # writes results/latency/{base,secure}_{cpu,gpu}.pdf
 ```
-
-**Analyzes overhead from:**
-- ACM (Arnold Cat Map) encryption/decryption
-- FFN (Feed-Forward Network) permutation encryption/decryption
-- Forward pass execution time
 
 ## Contact
 
