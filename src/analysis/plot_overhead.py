@@ -23,7 +23,7 @@ def panel(ax, rows, key, mode, xlabel):
     base = [r["baseline_ms"] for r in rows]
     extra = [r[f"{mode}_ms"] - r["baseline_ms"] for r in rows]
     ax.bar(xs, base, color=FWD, label="Forward pass (unprotected baseline)")
-    ax.bar(xs, [max(e, 0) for e in extra], bottom=base, color=PROT, label="Decrypt + re-encrypt (end-to-end)")
+    ax.bar(xs, [max(e, 0) for e in extra], bottom=base, color=PROT, label="Protection cost (end-to-end)")
     top = max(b + max(e, 0) for b, e in zip(base, extra, strict=True))
     for x, b, e, r in zip(xs, base, extra, rows, strict=True):
         ax.text(x, b + max(e, 0) + 0.01 * top, f"{r[f'{mode}_overhead']:.3f}×", ha="center", va="bottom",

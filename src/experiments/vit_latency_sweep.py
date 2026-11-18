@@ -6,8 +6,8 @@ Two protected pipelines:
   reencrypt  decrypt all protected layers in place -> forward -> re-encrypt them.
 Every configuration is timed with the same boundary: synchronize, R x protected pass,
 synchronize.
-Baseline and protected trials alternate (forward/reverse order) and the median over
-trials is reported.
+Within each trial, the baseline and every distinct protected config run in rotating order;
+each config is reported as the median over trials relative to the shared baseline.
 
   python -m src.experiments.vit_latency_sweep --device cuda:0 --pipeline reencrypt --output results/latency/gpu.json
   python -m src.experiments.vit_latency_sweep --device cpu --pipeline layerwise --output results/latency/cpu.json
@@ -64,14 +64,21 @@ def timed_protected(cipher, fwd, reps, device, pipeline) -> float:
     return timed(run, reps, device)
 
 
-def measure(model, x, layers, n, trials, reps, device, pipeline="layerwise") -> dict:
+def measure(model, x, configs, trials, reps, device, pipeline="layerwise") -> list[dict]:
+    """Time every config of a sweep against one shared baseline.
+
+    Within each trial the baseline and all protected (config, mode) runs execute in a
+    rotating order, so slow drift of the machine affects every config equally.
+    """
     fwd = torch.inference_mode()(lambda: model(pixel_values=x))
-    ciphers = {mode: TransformerCipher(model, secure=mode == "secure", selected_layers=layers,
-                                       seed=SECRET, arnold_key=(n, 1, 1, 1, 2))
-               for mode in ("base", "secure")}
-    samples = {name: [] for name in ("baseline", *ciphers)}
+    ciphers = {(i, mode): TransformerCipher(model, secure=mode == "secure", selected_layers=cfg["layers"],
+                                            seed=SECRET, arnold_key=(cfg["n"], 1, 1, 1, 2))
+               for i, cfg in enumerate(configs) for mode in ("base", "secure")}
+    names = ["baseline", *ciphers]
+    samples = {name: [] for name in names}
     for trial in range(trials):
-        for name in samples if trial % 2 == 0 else reversed(samples):
+        shift = trial % len(names)
+        for name in names[shift:] + names[:shift]:
             if name == "baseline":
                 samples[name].append(timed(fwd, reps, device))
                 continue
@@ -80,10 +87,14 @@ def measure(model, x, layers, n, trials, reps, device, pipeline="layerwise") -> 
             samples[name].append(timed_protected(cipher, fwd, reps, device, pipeline))
             cipher.decrypt_all()
     med = {k: statistics.median(v) for k, v in samples.items()}
-    row = {f"{k}_ms": v for k, v in med.items()}
-    row |= {f"{k}_trials_ms": v for k, v in samples.items()}
-    row |= {f"{m}_overhead": med[m] / med["baseline"] for m in ciphers}
-    return row
+    rows = []
+    for i, cfg in enumerate(configs):
+        row = dict(cfg, baseline_ms=med["baseline"], baseline_trials_ms=samples["baseline"])
+        for mode in ("base", "secure"):
+            row |= {f"{mode}_ms": med[i, mode], f"{mode}_trials_ms": samples[i, mode],
+                    f"{mode}_overhead": med[i, mode] / med["baseline"]}
+        rows.append(row)
+    return rows
 
 
 def environment(args, device, reps) -> dict:
@@ -98,7 +109,7 @@ def environment(args, device, reps) -> dict:
             "cuda": torch.version.cuda, "torch_threads": torch.get_num_threads(),
             "batch_size": args.batch_size, "dtype": "float32", "trials": args.trials, "reps_per_trial": reps,
             "pipeline": args.pipeline, "boundary": "sync; reps x protected pass; sync; inference_mode for all",
-            "aggregate": "median over trials; trials alternate order"}
+            "aggregate": "median over trials; all configs share the baseline and run in rotating order"}
 
 
 def main() -> None:
@@ -127,19 +138,18 @@ def main() -> None:
         for _ in range(3):
             model(pixel_values=x)
 
-    configs = []
-    if "layers" in args.sweeps:
-        configs += [{"sweep": "layers", "K": k, "n": 5} for k in (2, 4, 6, 8, 10, 12)]
-    if "iterations" in args.sweeps:
-        configs += [{"sweep": "iterations", "K": 6, "n": n} for n in (3, 5, 8, 12, 16, 32)]
-
-    rows = []
-    for cfg in configs:
-        layers = list(range(12 - cfg["K"], 12))  # Last-K; latency depends on K, not on which layers
-        row = cfg | {"layers": layers} | measure(model, x, layers, cfg["n"], args.trials, reps, device, args.pipeline)
+    sweeps = {"layers": [{"sweep": "layers", "K": k, "n": 5} for k in (2, 4, 6, 8, 10, 12)],
+              "iterations": [{"sweep": "iterations", "K": 6, "n": n} for n in (3, 5, 8, 12, 16, 32)]}
+    # Configs shared by several sweeps (K=6, n=5) are measured once and reported in each.
+    # Last-K; latency depends on K, not on which layers.
+    configs = [cfg for name in args.sweeps for cfg in sweeps[name]]
+    unique = list({(c["K"], c["n"]): {"K": c["K"], "n": c["n"], "layers": list(range(12 - c["K"], 12))}
+                   for c in configs}.values())
+    measured = {(r["K"], r["n"]): r for r in measure(model, x, unique, args.trials, reps, device, args.pipeline)}
+    rows = [{"sweep": cfg["sweep"]} | measured[cfg["K"], cfg["n"]] for cfg in configs]
+    for row in rows:
         print(json.dumps({k: row[k] for k in ("sweep", "K", "n", "baseline_ms", "base_ms", "secure_ms",
                                               "base_overhead", "secure_overhead")}), flush=True)
-        rows.append(row)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"environment": environment(args, device, reps), "rows": rows}, indent=2) + "\n")

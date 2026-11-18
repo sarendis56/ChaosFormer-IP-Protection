@@ -310,7 +310,8 @@ protected layer into shared buffers immediately before it runs and discards the
 plaintext after it (`TransformerCipher.authorized_inference`). `--pipeline reencrypt`
 decrypts the protected layers in place, runs the forward pass and re-encrypts them.
 Every configuration is timed with one boundary: synchronize, R x protected pass,
-synchronize. The reported value is the median of alternating baseline/protected trials.
+synchronize. Within each trial the baseline and every distinct config run in rotating order, and
+each config is reported as its median over trials relative to the shared baseline.
 
 ```bash
 uv run python -m src.experiments.vit_latency_sweep --device cuda:0 --trials 15 --reps 20 \

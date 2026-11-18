@@ -13,6 +13,9 @@ def test_measure_leaves_plaintext_weights_and_reports_ratios(pipeline):
                        num_hidden_layers=2, num_attention_heads=2)
     model = ViTForImageClassification(config).eval()
     original = {k: v.clone() for k, v in model.state_dict().items()}
-    row = measure(model, torch.randn(2, 3, 32, 32), [1], 5, trials=2, reps=1, device=torch.device("cpu"), pipeline=pipeline)
-    assert row["base_overhead"] > 0 and row["secure_overhead"] > 0
+    configs = [{"layers": [1], "n": 5}, {"layers": [0, 1], "n": 3}]
+    rows = measure(model, torch.randn(2, 3, 32, 32), configs, trials=3, reps=1, device=torch.device("cpu"),
+                   pipeline=pipeline)
+    assert len(rows) == 2 and rows[0]["baseline_ms"] == rows[1]["baseline_ms"]
+    assert all(r["base_overhead"] > 0 and r["secure_overhead"] > 0 for r in rows)
     assert all(torch.equal(original[k], v) for k, v in model.state_dict().items())
