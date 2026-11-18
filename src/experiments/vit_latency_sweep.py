@@ -1,16 +1,16 @@
 """End-to-end ViT-B latency for baseline, ChaosFormer and ChaosFormer-S (ChaCha20).
 
-Every configuration is timed with the same boundary: synchronize,
-R x [decrypt selected layers -> forward -> re-encrypt], synchronize. On CUDA, decrypt and re-encrypt
-each replay a captured CUDA graph. No per-stage synchronization inside the timed
-region. Baseline and protected trials alternate (forward/reverse order) and
-the median over trials is reported. A separate, explicitly instrumented pass
-(per-stage synchronization) gives a stage breakdown only.
+Two protected pipelines:
+  layerwise  ``TransformerCipher.authorized_inference``: each protected layer is decrypted
+             into shared plaintext buffers immediately before it runs and discarded after.
+  reencrypt  decrypt all protected layers in place -> forward -> re-encrypt them.
+Every configuration is timed with the same boundary: synchronize, R x protected pass,
+synchronize.
+Baseline and protected trials alternate (forward/reverse order) and the median over
+trials is reported.
 
-On CPU, set NUMBA_THREADING_LAYER=workqueue: the default layer busy-waits on
-the cores PyTorch uses once the ACM kernels have run.
-
-  python -m src.experiments.vit_latency_sweep --device cuda:0 --output results/latency/gpu.json
+  python -m src.experiments.vit_latency_sweep --device cuda:0 --pipeline reencrypt --output results/latency/gpu.json
+  python -m src.experiments.vit_latency_sweep --device cpu --pipeline layerwise --output results/latency/cpu.json
 """
 
 from __future__ import annotations
@@ -26,76 +26,9 @@ from pathlib import Path
 import torch
 from transformers import ViTConfig, ViTForImageClassification
 
-from src.encryption.arnold_transform import (
-    arnold_numba,
-    arnold_triton,
-    iarnold_numba,
-    iarnold_triton,
-)
-from src.encryption.chacha20 import chacha20_xor_, derive_chacha20_material
-from src.encryption.transformer_cipher import graph_replays
-from src.encryption.xor_encryption import get_stable_seed
+from src.encryption.transformer_cipher import TransformerCipher
 
 SECRET = b"chaosformer-latency"
-
-
-def _weights(model, layers):
-    for i in layers:
-        layer = model.vit.encoder.layer[i]
-        attention = layer.attention.attention
-        yield i, "query", "square", attention.query.weight
-        yield i, "key", "square", attention.key.weight
-        yield i, "value", "square", attention.value.weight
-        yield i, "attention_output", "square", layer.attention.output.dense.weight
-        yield i, "intermediate", "ffn_columns", layer.intermediate.dense.weight
-        yield i, "output", "ffn_rows", layer.output.dense.weight
-
-
-class Scheme:
-    """In-place encrypt/decrypt of the selected ViT layers.
-
-    mode 'base': ACM on attention matrices, row/column permutation on FFN matrices.
-    mode 'secure': base followed by ChaCha20 diffusion (removed first on decrypt).
-    """
-
-    def __init__(self, model, layers, mode: str, n: int, device: torch.device):
-        self.secure = mode == "secure"
-        self.arnold_key = [n, 1, 1, 1, 2]
-        gpu = device.type == "cuda"
-        self.arnold, self.iarnold = (arnold_triton, iarnold_triton) if gpu else (arnold_numba, iarnold_numba)
-        self.specs = []
-        for i, name, op, parameter in _weights(model, layers):
-            perm = inv = None
-            if op != "square":
-                dim = parameter.shape[1] if op == "ffn_columns" else parameter.shape[0]
-                generator = torch.Generator().manual_seed(get_stable_seed(i, name, SECRET))
-                perm = torch.randperm(dim, generator=generator).to(parameter.device)
-                inv = torch.argsort(perm)
-            self.specs.append((parameter, op, perm, inv, *derive_chacha20_material(i, name, SECRET)))
-
-    @staticmethod
-    def _permute(parameter, op, index):
-        parameter.copy_(parameter[:, index] if op == "ffn_columns" else parameter[index])
-
-    @torch.no_grad()
-    def encrypt(self) -> None:
-        for parameter, op, perm, _, key, nonce in self.specs:
-            if op == "square":
-                parameter.copy_(self.arnold(parameter, self.arnold_key))
-            else:
-                self._permute(parameter, op, perm)
-            if self.secure:
-                chacha20_xor_(parameter.data, key, nonce)
-
-    @torch.no_grad()
-    def decrypt(self) -> None:
-        for parameter, op, _, inv, key, nonce in self.specs:
-            if self.secure:
-                chacha20_xor_(parameter.data, key, nonce)
-            if op == "square":
-                parameter.copy_(self.iarnold(parameter, self.arnold_key))
-            else:
-                self._permute(parameter, op, inv)
 
 
 def sync(device):
@@ -112,60 +45,44 @@ def timed(fn, reps, device) -> float:
     return (time.perf_counter() - t0) * 1e3 / reps
 
 
-@torch.inference_mode()
-def breakdown(model, scheme, x, reps, device) -> dict:
-    """Instrumented pass: per-stage synchronization (inflates totals on GPU)."""
-    stages = {"decrypt_ms": scheme.decrypt, "forward_ms": lambda: model(pixel_values=x), "encrypt_ms": scheme.encrypt}
-    acc = dict.fromkeys(stages, 0.0)
-    for _ in range(reps):
-        for key, fn in stages.items():
-            sync(device)
-            t0 = time.perf_counter()
-            fn()
-            sync(device)
-            acc[key] += (time.perf_counter() - t0) * 1e3
-    return {k: v / reps for k, v in acc.items()}
+def timed_protected(cipher, fwd, reps, device, pipeline) -> float:
+    """Time ``reps`` protected passes; weights are encrypted before and after."""
+    if pipeline == "layerwise":
+        with cipher.authorized_inference():
+            fwd()  # warm-up
+            return timed(fwd, reps, device)
+
+    @torch.inference_mode()
+    def run():
+        for layer in cipher.layer_specs:
+            cipher.decrypt_layer(layer)
+        fwd()
+        for layer in cipher.layer_specs:
+            cipher.encrypt_layer(layer)
+
+    run()  # warm-up
+    return timed(run, reps, device)
 
 
-def measure(model, x, layers, n, trials, reps, device) -> dict:
+def measure(model, x, layers, n, trials, reps, device, pipeline="layerwise") -> dict:
     fwd = torch.inference_mode()(lambda: model(pixel_values=x))
-    schemes = {mode: Scheme(model, layers, mode, n, device) for mode in ("base", "secure")}
-    with torch.inference_mode():  # weights start and end in plaintext, so encrypt first
-        graphs = {}
-        for mode, s in schemes.items():
-            s.encrypt()
-            steps = [s.decrypt, s.encrypt]
-            graphs[mode] = graph_replays(steps) if device.type == "cuda" else steps
-            s.decrypt()
-    samples = {name: [] for name in ("baseline", *schemes)}
+    ciphers = {mode: TransformerCipher(model, secure=mode == "secure", selected_layers=layers,
+                                       seed=SECRET, arnold_key=(n, 1, 1, 1, 2))
+               for mode in ("base", "secure")}
+    samples = {name: [] for name in ("baseline", *ciphers)}
     for trial in range(trials):
         for name in samples if trial % 2 == 0 else reversed(samples):
             if name == "baseline":
                 samples[name].append(timed(fwd, reps, device))
                 continue
-            s = schemes[name]
-            decrypt, encrypt = graphs[name]
-
-            def run(decrypt=decrypt, encrypt=encrypt):
-                decrypt()
-                fwd()
-                encrypt()
-
-            with torch.inference_mode():  # one scheme applied at a time; weights end in plaintext
-                s.encrypt()
-                run()  # warm-up
-                samples[name].append(timed(run, reps, device))
-                s.decrypt()
+            cipher = ciphers[name]  # one scheme applied at a time; weights end in plaintext
+            cipher.encrypt_all()
+            samples[name].append(timed_protected(cipher, fwd, reps, device, pipeline))
+            cipher.decrypt_all()
     med = {k: statistics.median(v) for k, v in samples.items()}
     row = {f"{k}_ms": v for k, v in med.items()}
     row |= {f"{k}_trials_ms": v for k, v in samples.items()}
-    row |= {f"{m}_overhead": med[m] / med["baseline"] for m in schemes}
-    for mode, s in schemes.items():
-        with torch.inference_mode():
-            s.encrypt()
-        row[f"{mode}_instrumented_breakdown"] = breakdown(model, s, x, reps, device)
-        with torch.inference_mode():
-            s.decrypt()
+    row |= {f"{m}_overhead": med[m] / med["baseline"] for m in ciphers}
     return row
 
 
@@ -180,7 +97,7 @@ def environment(args, device, reps) -> dict:
             "transformers": transformers.__version__, "triton": triton.__version__,
             "cuda": torch.version.cuda, "torch_threads": torch.get_num_threads(),
             "batch_size": args.batch_size, "dtype": "float32", "trials": args.trials, "reps_per_trial": reps,
-            "boundary": "sync; reps x (decrypt selected -> forward -> re-encrypt); sync; inference_mode for all",
+            "pipeline": args.pipeline, "boundary": "sync; reps x protected pass; sync; inference_mode for all",
             "aggregate": "median over trials; trials alternate order"}
 
 
@@ -192,6 +109,7 @@ def main() -> None:
     p.add_argument("--reps", type=int, default=10)
     p.add_argument("--threads", type=int, default=0, help="torch CPU threads (0 = default)")
     p.add_argument("--sweeps", nargs="+", default=["layers", "iterations"])
+    p.add_argument("--pipeline", choices=["layerwise", "reencrypt"], default="layerwise")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
     device = torch.device(args.device)
@@ -218,7 +136,7 @@ def main() -> None:
     rows = []
     for cfg in configs:
         layers = list(range(12 - cfg["K"], 12))  # Last-K; latency depends on K, not on which layers
-        row = cfg | {"layers": layers} | measure(model, x, layers, cfg["n"], args.trials, reps, device)
+        row = cfg | {"layers": layers} | measure(model, x, layers, cfg["n"], args.trials, reps, device, args.pipeline)
         print(json.dumps({k: row[k] for k in ("sweep", "K", "n", "baseline_ms", "base_ms", "secure_ms",
                                               "base_overhead", "secure_overhead")}), flush=True)
         rows.append(row)

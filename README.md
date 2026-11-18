@@ -305,16 +305,18 @@ and does not allocate a tensor-sized key.
 
 End-to-end ViT-B latency (batch size 64) for the baseline, `ChaosFormer`, and
 `ChaosFormer-S`, sweeping the number of encrypted layers and ACM iterations.
-Every configuration is timed with one boundary: synchronize, R x (decrypt ->
-forward -> re-encrypt), synchronize. The reported value is the median of
-alternating baseline/protected trials.
+Two protected pipelines are available. `--pipeline layerwise` decrypts each
+protected layer into shared buffers immediately before it runs and discards the
+plaintext after it (`TransformerCipher.authorized_inference`). `--pipeline reencrypt`
+decrypts the protected layers in place, runs the forward pass and re-encrypts them.
+Every configuration is timed with one boundary: synchronize, R x protected pass,
+synchronize. The reported value is the median of alternating baseline/protected trials.
 
 ```bash
 uv run python -m src.experiments.vit_latency_sweep --device cuda:0 --trials 15 --reps 20 \
-    --output results/latency/gpu.json
-# CPU: use Numba's workqueue layer; the default layer busy-waits on PyTorch's cores.
-NUMBA_THREADING_LAYER=workqueue uv run python -m src.experiments.vit_latency_sweep \
-    --device cpu --threads 32 --trials 5 --reps 10 --output results/latency/cpu.json
+    --pipeline reencrypt --output results/latency/gpu.json
+uv run python -m src.experiments.vit_latency_sweep --device cpu --threads 32 --trials 15 --reps 50 \
+    --pipeline layerwise --output results/latency/cpu.json
 uv run python -m src.analysis.plot_overhead   # writes results/latency/{base,secure}_{cpu,gpu}.pdf
 ```
 

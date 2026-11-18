@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from .arnold_transform import arnold_triton, iarnold_triton
+from .arnold_transform import arnold_optimized, arnold_triton, iarnold_triton
 from .chacha20 import MasterSecret, chacha20_xor_, derive_chacha20_material
 from .xor_encryption import get_stable_seed
 
@@ -40,6 +40,8 @@ def _resolve(root: object, path: str) -> object:
 
 
 def transformer_layers(model: nn.Module) -> tuple[list[nn.Module], str]:
+    if hasattr(model, "vit"):
+        return list(model.vit.encoder.layer), "vit"
     if hasattr(model, "roberta"):
         return list(model.roberta.encoder.layer), "roberta"
     if (
@@ -56,11 +58,20 @@ def transformer_layers(model: nn.Module) -> tuple[list[nn.Module], str]:
         return list(model.model.decoder.layers), "opt"
     raise TypeError(
         f"unsupported architecture {type(model).__name__}; "
-        "expected RoBERTa, Wav2Vec2, or OPT-style separate Q/K/V projections"
+        "expected ViT, RoBERTa, Wav2Vec2, or OPT-style separate Q/K/V projections"
     )
 
 
 def _weight_layouts(family: str) -> list[tuple[str, str]]:
+    if family == "vit":
+        return [
+            ("attention.attention.query.weight", "square"),
+            ("attention.attention.key.weight", "square"),
+            ("attention.attention.value.weight", "square"),
+            ("attention.output.dense.weight", "square"),
+            ("intermediate.dense.weight", "ffn_columns"),
+            ("output.dense.weight", "ffn_rows"),
+        ]
     if family == "roberta":
         return [
             ("attention.self.query.weight", "square"),
@@ -115,6 +126,9 @@ class TransformerCipher:
         self.arnold_key = list(arnold_key)
         self.encrypted = False
         self.layer_specs: list[LayerSpec] = []
+        # CPU ACM: flat gather indices per shape, (encrypt, decrypt). The ACM is a fixed
+        # permutation of positions, so one precomputed index replaces the per-call map.
+        self._acm_index: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
 
         for index in selected:
             module = layers[index]
@@ -127,6 +141,8 @@ class TransformerCipher:
                     raise ValueError(f"{path} is not a matrix")
                 if operation == "square" and parameter.shape[0] != parameter.shape[1]:
                     raise ValueError(f"{path} is not square: {tuple(parameter.shape)}")
+                if operation == "square" and not parameter.is_cuda:
+                    self._cache_acm_index(tuple(parameter.shape))
 
                 permutation = inverse = None
                 diffusion_key = diffusion_nonce = None
@@ -181,30 +197,35 @@ class TransformerCipher:
             spec.parameter.data, spec.diffusion_key, spec.diffusion_nonce
         )
 
-    def _permute(self, spec: WeightSpec) -> None:
-        weight = spec.parameter.data
-        if spec.operation == "square":
-            transformed = arnold_triton(weight, self.arnold_key)
-        elif spec.operation == "ffn_columns":
-            transformed = weight[:, spec.permutation].contiguous()
-        else:
-            transformed = weight[spec.permutation].contiguous()
-        weight.copy_(transformed)
+    def _cache_acm_index(self, shape: tuple[int, int]) -> None:
+        if shape not in self._acm_index:
+            positions = torch.arange(shape[0] * shape[1], dtype=torch.float64).view(shape)
+            forward = arnold_optimized(positions, self.arnold_key).long()  # exact below 2**53
+            self._acm_index[shape] = (forward, torch.argsort(forward.view(-1)).view(shape))
 
-    def _unpermute(self, spec: WeightSpec) -> None:
-        weight = spec.parameter.data
+    def _transform_into(self, spec: WeightSpec, source: torch.Tensor, out: torch.Tensor, *, inverse: bool) -> None:
+        """Write the (inverse) permutation of ``source`` into ``out`` without temporaries."""
         if spec.operation == "square":
-            transformed = iarnold_triton(weight, self.arnold_key)
-        elif spec.operation == "ffn_columns":
-            transformed = weight[:, spec.inverse_permutation].contiguous()
+            if source.is_cuda:
+                (iarnold_triton if inverse else arnold_triton)(source, self.arnold_key, out=out)
+            else:
+                torch.take(source, self._acm_index[tuple(source.shape)][inverse], out=out)
+            return
+        index = spec.inverse_permutation if inverse else spec.permutation
+        if spec.operation == "ffn_rows":
+            torch.index_select(source, 0, index, out=out)
+        elif source.is_cuda:
+            torch.index_select(source, 1, index, out=out)
         else:
-            transformed = weight[spec.inverse_permutation].contiguous()
-        weight.copy_(transformed)
+            out.copy_(source[:, index])  # faster than CPU index_select along columns
 
     @torch.no_grad()
     def encrypt_layer(self, layer: LayerSpec) -> None:
         for spec in layer.weights:
-            self._permute(spec)
+            weight = spec.parameter.data
+            out = torch.empty_like(weight)
+            self._transform_into(spec, weight, out, inverse=False)
+            weight.copy_(out)
             if self.secure:
                 self._diffuse(layer.index, spec)
 
@@ -213,7 +234,22 @@ class TransformerCipher:
         for spec in layer.weights:
             if self.secure:
                 self._diffuse(layer.index, spec)
-            self._unpermute(spec)
+            weight = spec.parameter.data
+            out = torch.empty_like(weight)
+            self._transform_into(spec, weight, out, inverse=True)
+            weight.copy_(out)
+
+    @torch.no_grad()
+    def _decrypt_into(
+        self, layer: LayerSpec, stored: list[torch.Tensor], plain: list[torch.Tensor], scratch: list[torch.Tensor]
+    ) -> None:
+        """Decrypt ``stored`` (left unchanged) into ``plain``."""
+        for spec, source, out, work in zip(layer.weights, stored, plain, scratch, strict=True):
+            if self.secure:
+                work.copy_(source)
+                chacha20_xor_(work, spec.diffusion_key, spec.diffusion_nonce)
+                source = work
+            self._transform_into(spec, source, out, inverse=True)
 
     @torch.no_grad()
     def encrypt_all(self) -> None:
@@ -237,41 +273,70 @@ class TransformerCipher:
 
     @contextmanager
     def authorized_inference(self) -> Iterator[None]:
-        """Decrypt immediately before each protected layer and re-encrypt after it.
+        """Decrypt each protected layer into shared buffers immediately before it runs.
 
-        On CUDA, each layer's decrypt and re-encrypt are captured once as CUDA
-        graphs, so a forward pass issues two launches per protected layer.
+        The stored ciphertext is never modified, so nothing is re-encrypted: while a
+        layer runs its parameters point at the plaintext buffers, afterwards back at the
+        ciphertext. The buffers are zeroed after the last protected layer and on exit,
+        so at most one layer is in plaintext at a time. On CUDA each layer's decryption
+        replays a captured CUDA graph.
         """
         if not self.encrypted:
             raise RuntimeError("authorized inference expects encrypted-at-rest weights")
-        steps = [
-            step
-            for layer in self.layer_specs
-            for step in (
-                lambda layer=layer: self.decrypt_layer(layer),
-                lambda layer=layer: self.encrypt_layer(layer),
-            )
+        if not self.layer_specs:
+            yield
+            return
+        shapes = [spec.parameter.shape for spec in self.layer_specs[0].weights]
+        if any([spec.parameter.shape for spec in layer.weights] != shapes for layer in self.layer_specs):
+            raise ValueError("authorized inference expects protected layers with equal weight shapes")
+        with torch.inference_mode(False):  # parameters may not point at inference tensors
+            plain = [torch.empty_like(spec.parameter) for spec in self.layer_specs[0].weights]
+            scratch = [torch.empty_like(p) for p in plain] if self.secure else plain
+        stored = [[spec.parameter.data for spec in layer.weights] for layer in self.layer_specs]
+        steps: list[Callable[[], None]] = [
+            lambda layer=layer, data=data: self._decrypt_into(layer, data, plain, scratch)
+            for layer, data in zip(self.layer_specs, stored, strict=True)
         ]
-        if self.layer_specs and self.layer_specs[0].weights[0].parameter.is_cuda:
+
+        def zero_plaintext() -> None:
+            for buffer in plain:
+                buffer.zero_()
+
+        steps.append(zero_plaintext)
+        if plain[0].is_cuda:
             steps = graph_replays(steps)
-        handles: list[torch.utils.hooks.RemovableHandle] = []
-        for layer, decrypt, encrypt in zip(self.layer_specs, steps[::2], steps[1::2]):
-            handles.append(
-                layer.module.register_forward_pre_hook(
-                    lambda _module, _inputs, decrypt=decrypt: decrypt()
-                )
+        *decrypts, wipe = steps
+        last = max(layer.index for layer in self.layer_specs)
+
+        def attach(layer: LayerSpec, data: list[torch.Tensor], decrypt: Callable[[], None]):
+            def before(_module, _inputs):
+                decrypt()
+                for spec, buffer in zip(layer.weights, plain, strict=True):
+                    spec.parameter.data = buffer
+
+            def after(_module, _inputs, output):
+                for spec, tensor in zip(layer.weights, data, strict=True):
+                    spec.parameter.data = tensor
+                if layer.index == last:
+                    wipe()
+                return output
+
+            return (
+                layer.module.register_forward_pre_hook(before),
+                layer.module.register_forward_hook(after, always_call=True),
             )
-            handles.append(
-                layer.module.register_forward_hook(
-                    lambda _module, _inputs, output, encrypt=encrypt: (encrypt(), output)[1],
-                    always_call=True,
-                )
-            )
+
+        handles = [
+            handle
+            for layer, data, decrypt in zip(self.layer_specs, stored, decrypts, strict=True)
+            for handle in attach(layer, data, decrypt)
+        ]
         try:
             yield
         finally:
             for handle in handles:
                 handle.remove()
+            wipe()
 
 
 def graph_replays(steps: list[Callable[[], None]]) -> list[Callable[[], None]]:

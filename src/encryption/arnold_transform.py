@@ -108,6 +108,7 @@ def arnold_triton(
     xor_seed: Optional[Union[int, str, bytes, bytearray]] = None,
     xor_context: str = "arnold-attention",
     fixed_schedule: bool = False,
+    out: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Triton implementation of Arnold Cat Map with optional ChaCha20 diffusion.
@@ -119,6 +120,7 @@ def arnold_triton(
         xor_context: Domain-separation label for the protected tensor.
         fixed_schedule: Use the six-round, key-independent exponentiation schedule
             for supported iteration counts in ``[0, 63]``.
+        out: Optional CUDA output buffer (must not alias ``matrix``).
     """
     if not matrix.is_cuda:
         # Fallback to optimized version for CPU
@@ -148,7 +150,7 @@ def arnold_triton(
     c_inv = int((-c_f) % w)
     d_inv = int(a_f % w)
     
-    output = torch.empty_like(matrix)
+    output = torch.empty_like(matrix) if out is None else out
     
     def grid(meta):
         return (
@@ -178,6 +180,7 @@ def iarnold_triton(
     xor_seed: Optional[Union[int, str, bytes, bytearray]] = None,
     xor_context: str = "arnold-attention",
     fixed_schedule: bool = False,
+    out: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Inverse Arnold Cat Map with optional pre-permutation ChaCha20 removal.
@@ -207,6 +210,7 @@ def iarnold_triton(
         xor_seed=None,
         xor_context=xor_context,
         fixed_schedule=fixed_schedule,
+        out=out,
     )
 
 
