@@ -321,6 +321,20 @@ uv run python -m src.experiments.vit_latency_sweep --device cpu --threads 32 --t
 uv run python -m src.analysis.plot_overhead   # writes results/latency/{base,secure}_{cpu,gpu}.pdf
 ```
 
+### Cipher comparison
+
+One encryption + decryption round of the whole ViT-B and ViT-L checkpoints with AES
+(CBC/CTR/GCM, OpenSSL with AES-NI), TEA and XOR, against `ChaosFormer` and
+`ChaosFormer-S` on their protected layers (K = 6 and 7, n = 3). Methods run in rotating
+order; each value is the median over trials.
+
+```bash
+uv run python -m src.experiments.cipher_comparison --device cpu --threads 32 --trials 15 \
+    --output results/cipher_comparison/cpu.json
+uv run python -m src.experiments.cipher_comparison --device cuda:0 --trials 15 \
+    --output results/cipher_comparison/gpu.json
+```
+
 ## Contact
 
 For issues or questions about this repository, please refer to the paper or contact the authors by email (peichunhua@link.cuhk.edu.cn).
