@@ -326,10 +326,10 @@ uv run python -m src.analysis.plot_overhead   # writes results/latency/{base,sec
 One encryption + decryption round of the whole ViT-B and ViT-L checkpoints with AES
 (CBC/CTR/GCM, OpenSSL with AES-NI), TEA and XOR, against `ChaosFormer` and
 `ChaosFormer-S` on their protected layers (K = 6 and 7, n = 3). Methods run in rotating
-order; each value is the median over trials.
+order; each value is the median over trials. On the CPU every method runs on one thread.
 
 ```bash
-uv run python -m src.experiments.cipher_comparison --device cpu --threads 32 --trials 15 \
+OMP_NUM_THREADS=1 taskset -c 0 uv run python -m src.experiments.cipher_comparison --device cpu --threads 1 --trials 15 \
     --output results/cipher_comparison/cpu.json
 uv run python -m src.experiments.cipher_comparison --device cuda:0 --trials 15 \
     --output results/cipher_comparison/gpu.json
