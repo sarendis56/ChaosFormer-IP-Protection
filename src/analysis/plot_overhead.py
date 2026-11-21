@@ -47,8 +47,8 @@ def main():
         layers = [r for r in rows if r["sweep"] == "layers"]
         iters = [r for r in rows if r["sweep"] == "iterations"]
         fig, axes = plt.subplots(1, 2, figsize=(11, 3.4))
-        panel(axes[0], iters, "n", "base", "Number of ACM Iterations ($K=6$)")
-        panel(axes[1], layers, "K", "base", "Number of Encrypted Layers ($n=5$)")
+        panel(axes[0], iters, "n", "base", "Number of ACM Iterations $n$ (fixed $K=6$)")
+        panel(axes[1], layers, "K", "base", "Number of Encrypted Layers $K$ (fixed $n=5$)")
         axes[0].legend(loc="lower center", fontsize=9, framealpha=0.9)
         fig.tight_layout()
         fig.savefig(out / f"base_{dev}.pdf")
