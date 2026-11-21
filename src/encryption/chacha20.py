@@ -45,26 +45,10 @@ def derive_chacha20_material(
     weight_name: str,
     master_secret: MasterSecret,
 ) -> tuple[bytes, bytes]:
-    """Derive a tensor-specific ChaCha20 key and nonce.
+    """Derive a tensor-specific ChaCha20 key and nonce via HKDF (manuscript Eq. 10)."""
+    from .keys import diffusion_material
 
-    The SHA-256 calls are a lightweight, domain-separated KDF for the software
-    prototype.  A deployment can supply the same material from its system KDF.
-    """
-
-    context = (
-        int(layer_idx).to_bytes(8, "big", signed=False)
-        + len(weight_name.encode("utf-8")).to_bytes(4, "big")
-        + weight_name.encode("utf-8")
-    )
-    secret = _secret_bytes(master_secret)
-    root = hashlib.sha256(b"ChaosFormer/KDF/root/v1\x00" + secret).digest()
-    key = hmac.new(
-        root, b"ChaosFormer/ChaCha20/key/v1\x00" + context, hashlib.sha256
-    ).digest()
-    nonce = hmac.new(
-        root, b"ChaosFormer/ChaCha20/nonce/v1\x00" + context, hashlib.sha256
-    ).digest()[:12]
-    return key, nonce
+    return diffusion_material(master_secret, layer_idx, weight_name)
 
 
 def _rotl32_host(value: int, shift: int) -> int:

@@ -20,6 +20,7 @@ from .permutation import (
     encrypt_ffn_weight_row_permutation,
     decrypt_ffn_weight_row_permutation
 )
+from .keys import ATTENTION_ORDER, acm_key, ffn_permutation
 from .xor_encryption import (
     xor_encrypt_decrypt_triton,
     get_stable_seed,
@@ -233,7 +234,8 @@ class DualEncryption:
                 )
                 encrypted_attention[name] = arnold_triton(
                     weight,
-                    self.config.arnold_key,
+                    self._acm_key(layer_idx, name, weight.shape[0]),
+                    fixed_schedule=True,
                     xor_seed=diffusion_secret,
                     xor_context=f"attention:{layer_idx}:{name}",
                 )
@@ -243,6 +245,21 @@ class DualEncryption:
                 encrypted_attention[name] = self._knuth_shuffle(weight, layer_idx, name)
             
         return encrypted_attention
+
+    def _acm_key(self, layer_idx: int, name: str, size: int) -> List[int]:
+        """Per-matrix key derived from the master secret (keys.py), else the fixed key."""
+        if self.config.master_secret is None:
+            return self.config.arnold_key
+        return acm_key(self.config.master_secret, layer_idx, ATTENTION_ORDER.index(name), size)
+
+    def _ffn_permute(self, weight: torch.Tensor, name: str, layer_idx: int, inverse: bool) -> torch.Tensor:
+        """Permute the model dimension of an FFN matrix with its HKDF-derived shuffle."""
+        columns = name == 'intermediate'
+        perm = ffn_permutation(self.config.master_secret, layer_idx, 1 if columns else 2,
+                               weight.shape[1] if columns else weight.shape[0]).to(weight.device)
+        if inverse:
+            perm = torch.argsort(perm)
+        return (weight[:, perm] if columns else weight[perm]).contiguous()
 
     def _knuth_shuffle(self, weight: torch.Tensor, layer_idx: int, name: str) -> torch.Tensor:
         """Simulate Knuth Shuffle using deterministic random permutation."""
@@ -275,7 +292,9 @@ class DualEncryption:
         for name, weight in ffn_weights.items():
             # Knuth Shuffle (Permutation)
             # For FFN, we use the provided permutation matrices or generate on the fly
-            if permutation_matrix_idx < len(self.permutation_matrices):
+            if self.config.master_secret is not None:
+                permuted = self._ffn_permute(weight, name, layer_idx, inverse=False)
+            elif permutation_matrix_idx < len(self.permutation_matrices):
                 perm_matrix = self.permutation_matrices[permutation_matrix_idx]
                 
                 if name == 'intermediate':
@@ -339,7 +358,8 @@ class DualEncryption:
                 )
                 decrypted_attention[name] = iarnold_triton(
                     weight,
-                    self.config.arnold_key,
+                    self._acm_key(layer_idx, name, weight.shape[0]),
+                    fixed_schedule=True,
                     xor_seed=diffusion_secret,
                     xor_context=f"attention:{layer_idx}:{name}",
                 )
@@ -385,7 +405,9 @@ class DualEncryption:
                     seed_base=self.diffusion_secret
                 )
             
-            if permutation_matrix_idx < len(self.permutation_matrices):
+            if self.config.master_secret is not None:
+                decrypted_ffn[name] = self._ffn_permute(weight, name, layer_idx, inverse=True)
+            elif permutation_matrix_idx < len(self.permutation_matrices):
                 perm_matrix = self.permutation_matrices[permutation_matrix_idx]
                 
                 if name == 'intermediate':

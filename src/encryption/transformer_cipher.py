@@ -11,7 +11,7 @@ from torch import nn
 
 from .arnold_transform import arnold_optimized, arnold_triton, iarnold_triton
 from .chacha20 import MasterSecret, chacha20_xor_, derive_chacha20_material
-from .xor_encryption import get_stable_seed
+from .keys import acm_key, ffn_permutation
 
 
 @dataclass
@@ -19,6 +19,7 @@ class WeightSpec:
     name: str
     parameter: nn.Parameter
     operation: str
+    acm_key: list[int] | None = None
     permutation: torch.Tensor | None = None
     inverse_permutation: torch.Tensor | None = None
     diffusion_key: bytes | None = None
@@ -112,8 +113,10 @@ class TransformerCipher:
         secure: bool,
         selected_layers: list[int] | None = None,
         seed: MasterSecret = 20260710,
-        arnold_key: tuple[int, int, int, int, int] = (3, 1, 1, 1, 2),
+        arnold_key: tuple[int, int, int, int, int] | None = None,
     ) -> None:
+        """``arnold_key`` overrides the derived ACM keys (e.g. to sweep n); by default
+        every attention matrix gets its own key from ``seed`` (``keys.py``)."""
         layers, family = transformer_layers(model)
         selected = (
             list(range(len(layers))) if selected_layers is None else selected_layers
@@ -123,16 +126,16 @@ class TransformerCipher:
             raise ValueError(f"invalid layer indices: {invalid}")
         self.secure = secure
         self.seed = seed
-        self.arnold_key = list(arnold_key)
         self.encrypted = False
         self.layer_specs: list[LayerSpec] = []
         # CPU ACM: flat gather indices per shape, (encrypt, decrypt). The ACM is a fixed
         # permutation of positions, so one precomputed index replaces the per-call map.
-        self._acm_index: dict[tuple[int, int], tuple[torch.Tensor, torch.Tensor]] = {}
+        self._acm_index: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 
         for index in selected:
             module = layers[index]
             specs: list[WeightSpec] = []
+            n_square = n_ffn = 0
             for path, operation in _weight_layouts(family):
                 parameter = _resolve(module, path)
                 if not isinstance(parameter, nn.Parameter):
@@ -141,8 +144,13 @@ class TransformerCipher:
                     raise ValueError(f"{path} is not a matrix")
                 if operation == "square" and parameter.shape[0] != parameter.shape[1]:
                     raise ValueError(f"{path} is not square: {tuple(parameter.shape)}")
-                if operation == "square" and not parameter.is_cuda:
-                    self._cache_acm_index(tuple(parameter.shape))
+                key = None
+                if operation == "square":
+                    key = list(arnold_key) if arnold_key is not None else acm_key(
+                        seed, index, n_square, parameter.shape[0])
+                    n_square += 1
+                    if not parameter.is_cuda:
+                        self._cache_acm_index(tuple(parameter.shape), key)
 
                 permutation = inverse = None
                 diffusion_key = diffusion_nonce = None
@@ -152,11 +160,9 @@ class TransformerCipher:
                         if operation == "ffn_columns"
                         else parameter.shape[0]
                     )
-                    generator = torch.Generator(device="cpu")
-                    stable = get_stable_seed(index, path, seed)
-                    generator.manual_seed(stable)
-                    permutation = torch.randperm(
-                        hidden_dimension, generator=generator
+                    n_ffn += 1
+                    permutation = ffn_permutation(
+                        seed, index, n_ffn, hidden_dimension
                     ).to(parameter.device)
                     inverse = torch.argsort(permutation)
                 if secure:
@@ -168,6 +174,7 @@ class TransformerCipher:
                         name=path,
                         parameter=parameter,
                         operation=operation,
+                        acm_key=key,
                         permutation=permutation,
                         inverse_permutation=inverse,
                         diffusion_key=diffusion_key,
@@ -197,19 +204,19 @@ class TransformerCipher:
             spec.parameter.data, spec.diffusion_key, spec.diffusion_nonce
         )
 
-    def _cache_acm_index(self, shape: tuple[int, int]) -> None:
-        if shape not in self._acm_index:
+    def _cache_acm_index(self, shape: tuple[int, int], key: list[int]) -> None:
+        if (shape, *key) not in self._acm_index:
             positions = torch.arange(shape[0] * shape[1], dtype=torch.float64).view(shape)
-            forward = arnold_optimized(positions, self.arnold_key).long()  # exact below 2**53
-            self._acm_index[shape] = (forward, torch.argsort(forward.view(-1)).view(shape))
+            forward = arnold_optimized(positions, key, fixed_schedule=True).long()  # exact below 2**53
+            self._acm_index[(shape, *key)] = (forward, torch.argsort(forward.view(-1)).view(shape))
 
     def _transform_into(self, spec: WeightSpec, source: torch.Tensor, out: torch.Tensor, *, inverse: bool) -> None:
         """Write the (inverse) permutation of ``source`` into ``out`` without temporaries."""
         if spec.operation == "square":
             if source.is_cuda:
-                (iarnold_triton if inverse else arnold_triton)(source, self.arnold_key, out=out)
+                (iarnold_triton if inverse else arnold_triton)(source, spec.acm_key, fixed_schedule=True, out=out)
             else:
-                torch.take(source, self._acm_index[tuple(source.shape)][inverse], out=out)
+                torch.take(source, self._acm_index[(tuple(source.shape), *spec.acm_key)][inverse], out=out)
             return
         index = spec.inverse_permutation if inverse else spec.permutation
         if spec.operation == "ffn_rows":

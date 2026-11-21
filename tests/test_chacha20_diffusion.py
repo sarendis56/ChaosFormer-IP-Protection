@@ -117,8 +117,9 @@ class ChaCha20DiffusionTest(unittest.TestCase):
         original = torch.arange(64, dtype=torch.float32).reshape(8, 8)
         expected = arnold_triton(
             original,
-            cipher.config.arnold_key,
+            cipher._acm_key(2, "query", 8),
             xor_seed=cipher.diffusion_secret,
+            fixed_schedule=True,
             xor_context="attention:2:query",
         )
         actual = cipher.encrypt_attention_weights(
